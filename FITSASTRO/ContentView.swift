@@ -1,18 +1,45 @@
 import SwiftUI
 import UIKit
 import Combine
+import UniformTypeIdentifiers
+import ImageIO
+
+struct FITSDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.data] }
+    var data: Data
+
+    init(data: Data = Data()) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        self.data = configuration.file.regularFileContents ?? Data()
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        return .init(regularFileWithContents: data)
+    }
+}
 
 @main
 struct FITSViewerApp: App {
+    init() {
+        let appearance = UINavigationBarAppearance()
+        appearance.configureWithOpaqueBackground()
+        appearance.backgroundColor = UIColor.systemBackground
+        UINavigationBar.appearance().standardAppearance = appearance
+        UINavigationBar.appearance().scrollEdgeAppearance = appearance
+    }
+    
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        DocumentGroup(newDocument: FITSDocument()) { file in
+            ContentView(document: file.document)
         }
     }
 }
 
 enum ScaleMode: CaseIterable {
-    case linear, log
+    case linear, log, square
 }
 
 enum ColorMap: String, CaseIterable {
@@ -20,8 +47,15 @@ enum ColorMap: String, CaseIterable {
 }
 
 struct ContentView: View {
-    enum Phase { case selectFile, loading, viewing, error(String) }
-    @State private var phase: Phase = .selectFile
+    private let document: FITSDocument
+
+    init(document: FITSDocument) {
+        self.document = document
+    }
+
+    enum Phase: Equatable { case selectFile, loading, viewing, error(String) }
+    @State private var phase: Phase = .loading
+    @State private var hasLoaded = false
 
     // FITS data
     @State private var fitsFloats: [Float] = []
@@ -36,19 +70,64 @@ struct ContentView: View {
     @State private var clipMinPct: Double = 0
     @State private var clipMaxPct: Double = 100
     @State private var colorMap: ColorMap = .gray
-    @State private var showPicker = false
+    @State private var showPicker = true
+    @State private var showSidebar = true
+
+    @State private var zoomScale: CGFloat = 1.0
+    @State private var lastZoomValue: CGFloat = 1.0
+    @State private var panOffset: CGSize = .zero
+    @State private var lastPanOffset: CGSize = .zero
+
+    @State private var showHeader = false
+    @State private var headerDict: [String: String] = [:]
 
     private let renderTrigger = PassthroughSubject<Void, Never>()
     @State private var renderCancellable: AnyCancellable?
 
     var body: some View {
-        Group {
-            switch phase {
-            case .selectFile: selectScreen
-            case .loading: loadingScreen
-            case .viewing:
-    viewerScreen
-            case .error(let msg): errorScreen(msg)
+        NavigationView {
+            Group {
+                switch phase {
+                case .selectFile: selectScreen
+                case .loading: loadingScreen
+                case .viewing: viewerScreen
+                case .error(let msg): errorScreen(msg)
+                }
+            }
+            .navigationTitle("FITS Viewer")
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: { showHeader.toggle() }) {
+                        Image(systemName: "text.alignleft")
+                    }
+                    .disabled(headerDict.isEmpty)
+                }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        withAnimation(.easeInOut) {
+                            showSidebar.toggle()
+                        }
+                    }) {
+                        Image(systemName: "v.square.fill")
+                    }
+                }
+            }
+        }
+        .sheet(isPresented: $showHeader) {
+            NavigationView {
+                List(headerDict.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
+                    HStack {
+                        Text(key).bold()
+                        Spacer()
+                        Text(value)
+                    }
+                }
+                .navigationTitle("FITS Header")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close") { showHeader = false }
+                    }
+                }
             }
         }
         .onAppear {
@@ -60,23 +139,33 @@ struct ContentView: View {
                           latest: true)
                 .sink { _ in
                     // generate the new UIImage off the main thread
-                    let img = renderToUIImage()
+                    let raw = renderToUIImage()
+                    let maxDim = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
+                    let thumb = downsample(raw, maxDimension: maxDim)
                     // push it back to the UI
-                    DispatchQueue.main.async { uiImage = img }
+                    DispatchQueue.main.async { uiImage = thumb }
                 }
         }
-        .fileImporter(
-            isPresented: $showPicker,
-            allowedContentTypes: [.data],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                if let url = urls.first {
-                    loadFitsAsync(url)
-                }
-            case .failure(let err):
-                phase = .error(err.localizedDescription)
+        .task {
+            guard !hasLoaded else { return }
+            hasLoaded = true
+            // write document.data to temp URL
+            let tempURL = FileManager.default.temporaryDirectory
+                .appendingPathComponent("temp.fits")
+            do {
+                try document.data.write(to: tempURL)
+                loadFitsAsync(tempURL)
+            } catch {
+                phase = .error("Failed to load document data: \(error)")
+            }
+        }
+        .onChange(of: phase) { newPhase in
+            if case .selectFile = newPhase {
+                // Clear loaded image and data when returning to picker
+                fitsFloats.removeAll(keepingCapacity: false)
+                fitsWidth = 0
+                fitsHeight = 0
+                uiImage = nil
             }
         }
     }
@@ -94,71 +183,118 @@ struct ContentView: View {
             .progressViewStyle(CircularProgressViewStyle())
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-
+    
     private var viewerScreen: some View {
-        VStack(spacing: 0) {
+        HStack(spacing: 0) {
+            // ——— The image viewer ———
             GeometryReader { geo in
                 if let img = uiImage {
                     Image(uiImage: img)
                         .resizable()
+                        .interpolation(.none)
                         .scaledToFit()
-                        .scaleEffect(x: 1, y: -1)
+                        .scaleEffect(x: zoomScale, y: -zoomScale)
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    let delta = value / lastZoomValue
+                                    lastZoomValue = value
+                                    zoomScale *= delta
+                                }
+                                .onEnded { _ in lastZoomValue = 1.0 }
+                        )
+                        .offset(panOffset)
                         .frame(width: geo.size.width, height: geo.size.height)
+                        .simultaneousGesture(
+                            DragGesture()
+                                .onChanged { value in
+                                    let translation = value.translation
+                                    let delta = CGSize(
+                                        width: translation.width - lastPanOffset.width,
+                                        height: translation.height - lastPanOffset.height
+                                    )
+                                    lastPanOffset = translation
+                                    panOffset = CGSize(
+                                        width: panOffset.width + delta.width,
+                                        height: panOffset.height + delta.height
+                                    )
+                                }
+                                .onEnded { _ in lastPanOffset = .zero }
+                        )
                 } else {
                     Text("Rendering…")
                         .frame(width: geo.size.width, height: geo.size.height)
                 }
             }
-            Form {
-                Section(header: Text("Scale Mode")) {
-                    Picker("Scale", selection: $scaleMode) {
-                        ForEach(ScaleMode.allCases, id: \.self) { mode in
-                            Text(mode == .linear ? "Linear" : "Log").tag(mode)
-                        }
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                }
-                Section(header: Text("Clip Percentiles")) {
-    // Quick presets for upper clip
-    ScrollView(.horizontal, showsIndicators: false) {
-        HStack(spacing: 8) {
-            ForEach([90.0, 95.0, 99.0, 99.5, 99.9, 99.95, 99.99, 100.0], id: \.self) { p in
-                Button("\(p, specifier: p.truncatingRemainder(dividingBy: 1)==0 ? "%.0f" : "%.2f")%") {
-                    clipMaxPct = p
-                    renderTrigger.send()
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .padding(.vertical, 4)
-    }
-    // Min slider
-    HStack {
-        Text("Min: \(Int(clipMinPct))%")
-        Slider(value: $clipMinPct, in: 0...clipMaxPct, step: 1)
-                    .onChange(of: clipMinPct) { _ in renderTrigger.send() }
-    }
-    // Max slider with fine step
-    HStack {
-        Text("Max: \(clipMaxPct, specifier: clipMaxPct.truncatingRemainder(dividingBy: 1)==0 ? "%.0f" : "%.2f")%")
-        Slider(value: $clipMaxPct, in: clipMinPct...100, step: 0.01)
-                    .onChange(of: clipMaxPct) { _ in renderTrigger.send() }
-    }
-                };Section(header: Text("Color Map")) {
-                    Picker("Color Map", selection: $colorMap) {
-                        ForEach(ColorMap.allCases, id: \.self) { cm in
-                            Text(cm.rawValue.capitalized).tag(cm)
-                        }
-                    }
-                    .pickerStyle(SegmentedPickerStyle())
-                }
-            }
-            .frame(height: 260)
-            .onChange(of: scaleMode) { _,_ in renderTrigger.send() }
-                    .onChange(of: colorMap) { _,_ in renderTrigger.send() }
-        }
-    }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
+            .background(Color(UIColor.lightGray))
 
+            // ——— The sidebar of controls ———
+            if showSidebar {
+                Form {
+                    Section(header: Text("Scale Mode")) {
+                        Picker("Scale", selection: $scaleMode) {
+                            Text("Linear").tag(ScaleMode.linear)
+                            Text("Log").tag(ScaleMode.log)
+                            Text("Square").tag(ScaleMode.square)
+                        }
+                        .pickerStyle(.segmented)
+                    }
+
+                    Section(header: Text("Clip Percentiles")) {
+                        // Quick presets
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach([90.0, 95.0, 99.0, 99.5, 99.9, 99.95, 99.99, 100.0], id: \.self) { p in
+                                    Button("\(p, specifier: p.truncatingRemainder(dividingBy: 1)==0 ? "%.0f" : "%.2f")%") {
+                                        clipMaxPct = p
+                                        renderTrigger.send()
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        // Min slider
+                        HStack {
+                            Text("Min: \(Int(clipMinPct))%")
+                            Slider(value: $clipMinPct, in: 0...clipMaxPct)
+                                .onChange(of: clipMinPct) { _ in renderTrigger.send() }
+                        }
+                        // Max slider
+                        HStack {
+                            Text("Max: \(clipMaxPct, specifier: clipMaxPct.truncatingRemainder(dividingBy: 1)==0 ? "%.0f" : "%.2f")%")
+                            Slider(value: $clipMaxPct, in: clipMinPct...100)
+                                .onChange(of: clipMaxPct) { _ in renderTrigger.send() }
+                        }
+                    }
+
+                    Section(header: Text("Color Map")) {
+                        Picker("Color Map", selection: $colorMap) {
+                            ForEach(ColorMap.allCases, id: \.self) { cm in
+                                Text(cm.rawValue.capitalized)
+                                    .tag(cm)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                }
+                .padding(.vertical)
+                .frame(width: 350)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color(UIColor.secondarySystemBackground))
+                )
+                .padding(.vertical, 8)
+            }
+        }
+        .background(Color(UIColor.lightGray))
+        .onChange(of: scaleMode)   { _,_ in renderTrigger.send() }
+        .onChange(of: colorMap)    { _,_ in renderTrigger.send() }
+        .animation(.easeInOut, value: showSidebar)
+    }
+    
     private func errorScreen(_ msg: String) -> some View {
         VStack(spacing: 20) {
             Text("Error: \(msg)")
@@ -169,6 +305,9 @@ struct ContentView: View {
     }
 
     private func loadFitsAsync(_ url: URL) {
+        // Clearing previous data to free memory
+        fitsFloats.removeAll(keepingCapacity: false)
+        uiImage = nil
         phase = .loading
         DispatchQueue.global(qos: .userInitiated).async {
             let ok = url.startAccessingSecurityScopedResource()
@@ -190,6 +329,9 @@ struct ContentView: View {
 
     private func renderToUIImage() -> UIImage {
         var phys = fitsFloats.map { Float(bzero) + Float(bscale) * $0 }
+        if scaleMode == .square {
+            phys = phys.map { $0 * $0 }
+        }
         if scaleMode == .log {
             let minv = phys.min() ?? 0
             let shift = min(0, minv) * -1
@@ -197,12 +339,18 @@ struct ContentView: View {
         }
         let sorted = phys.sorted()
         let count = sorted.count
-        let lowVal = sorted[Int(Double(count - 1) * clipMinPct / 100)]
-        let highVal = sorted[Int(Double(count - 1) * clipMaxPct / 100)]
+        // Compute integer indices based on rounded percentiles
+        let idxScale = Double(count - 1) / 100.0
+        let lowIndex  = max(0, min(count-1, Int(round(clipMinPct * idxScale))))
+        let highIndex = max(0, min(count-1, Int(round(clipMaxPct * idxScale))))
+        let lowVal    = sorted[lowIndex]
+        let highVal   = sorted[highIndex]
         let rng = (highVal - lowVal) != 0 ? (highVal - lowVal) : 1
         var pixels = [UInt8](repeating: 0, count: fitsWidth * fitsHeight * 4)
         for i in 0..<count {
-            let t = min(max((phys[i] - lowVal)/rng, 0), 1)
+            var t = (phys[i] - lowVal) / rng
+            if !t.isFinite { t = 0 }
+            t = min(max(t, 0), 1)
             let (r,g,b): (Float,Float,Float)
             switch colorMap {
             case .gray: (r,g,b) = (t,t,t)
@@ -244,6 +392,24 @@ struct ContentView: View {
                 offset = end
             } while !str.contains("END")
             let cards = str.chunked(into: 80)
+            // Build a dictionary of header cards
+            var headerDict = [String: String]()
+            for card in cards {
+                let key = String(card.prefix(8)).trimmingCharacters(in: .whitespaces)
+                guard let eqIdx = card.firstIndex(of: "=") else { continue }
+                let rawValue = String(card[card.index(after: eqIdx)...])
+                    .split(separator: "/")[0]
+                    .trimmingCharacters(in: .whitespaces)
+                headerDict[key] = rawValue
+            }
+            // Save header for display
+            DispatchQueue.main.async {
+                self.headerDict = headerDict
+            }
+            // Skip non-image HDUs (e.g., binary tables)
+            if let xt = headerDict["XTENSION"], !xt.contains("IMAGE") {
+                continue
+            }
             var w = 0, h = 0, bp = 0
             bscale = 1; bzero = 0
             for card in cards {
@@ -312,3 +478,15 @@ extension String {
         return out
     }
 }
+
+    private func downsample(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
+        guard let data = image.pngData() else { return image }
+        let options: [CFString: Any] = [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension
+        ]
+        let source = CGImageSourceCreateWithData(data as CFData, nil)!
+        let cgThumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)!
+        return UIImage(cgImage: cgThumb)
+    }

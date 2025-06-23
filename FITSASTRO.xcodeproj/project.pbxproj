@@ -195,6 +195,9 @@
 			);
 			mainGroup = 1B84E3EF2E03BC9B000C863E;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				1BA116562E089FDF00A88804 /* XCRemoteSwiftPackageReference "fitskit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 1B84E3F92E03BC9B000C863E /* Products */;
 			projectDirPath = "";
@@ -552,6 +555,17 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		1BA116562E089FDF00A88804 /* XCRemoteSwiftPackageReference "fitskit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/brampf/fitskit";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
 	};
 	rootObject = 1B84E3F02E03BC9B000C863E /* Project object */;
 }
