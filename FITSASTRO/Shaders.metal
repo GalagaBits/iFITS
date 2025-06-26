@@ -14,11 +14,6 @@ vertex VertexOut vertex_pass(uint vid [[vertex_id]]) {
   return o;
 }
 
-// Inferno map
-
-
-
-
 
 fragment float4 fragment_fits(VertexOut in [[stage_in]],
                               texture2d<float> fitsTex [[texture(0)]],
