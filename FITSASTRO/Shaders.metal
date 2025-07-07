@@ -28,7 +28,7 @@ fragment float4 fragment_fits(VertexOut in [[stage_in]],
       coord::normalized,
       address::clamp_to_edge,
       filter::nearest,
-      mip_filter::nearest // Use linear mipmap filtering
+      mip_filter::nearest
   );
     
   constexpr float3 inferno_lut[64] = {

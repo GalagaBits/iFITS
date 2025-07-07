@@ -7,42 +7,17 @@
  - Provides pan/zoom gestures and adjustable visualization controls.
  */
 import SwiftUI
-import UIKit
-import Combine
 import UniformTypeIdentifiers
-import ImageIO
 import MetalKit
-import simd
 
 /// MARK: - FITS Document Model
 /// Conforms to FileDocument to allow SwiftUI DocumentGroup integration.
-struct FITSDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.data] }
-    var data: Data
-
-    /// Initializes a new FITSDocument with raw data, defaulting to an empty buffer.
-    init(data: Data = Data()) {
-        self.data = data
-    }
-
-    /// Reads document contents from the provided file wrapper and stores as raw data.
-    /// - Parameters:
-    ///   - configuration: SwiftUI's document read configuration.
-    /// - Throws: If reading fails.
-    /// Integrates with SwiftUI's document system for loading files.
-    init(configuration: ReadConfiguration) throws {
-        self.data = configuration.file.regularFileContents ?? Data()
-    }
-
-    /// Produces a FileWrapper for saving the document's raw data back to disk.
-    /// - Parameters:
-    ///   - configuration: SwiftUI's document write configuration.
-    /// - Returns: FileWrapper containing the data for saving.
-    /// Integrates with SwiftUI's document system for saving files.
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        return .init(regularFileWithContents: data)
-    }
+///
+extension UTType {
+  /// Dynamically wraps the “fits” extension in a UTType.
+  static let fitsFile = UTType(filenameExtension: "fits")!
 }
+
 
 /// MARK: - App Entry Point
 /// Sets up global navigation bar styling and hosts the DocumentGroup for FITS documents.
@@ -56,11 +31,11 @@ struct FITSViewerApp: App {
         UINavigationBar.appearance().standardAppearance = appearance
         UINavigationBar.appearance().scrollEdgeAppearance = appearance
     }
-    
-    /// The main scene of the application using a DocumentGroup to manage FITS files.
+
+    /// The main scene of the application using a WindowGroup and manual document picker.
     var body: some Scene {
-        DocumentGroup(newDocument: FITSDocument()) { file in
-            ContentView(document: file.document)
+        WindowGroup {
+            ContentView()
         }
     }
 }
@@ -90,22 +65,26 @@ struct MetalFITSView: UIViewRepresentable {
     var clipPct: SIMD2<Float>
     var scaleModeIndex: UInt
     var colorMapIndex: UInt
+    @Binding var zoomScale: CGFloat
 
     func makeUIView(context: Context) -> MTKView {
         let view = MTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
         view.framebufferOnly = false
         view.delegate = context.coordinator
         context.coordinator.setup(view: view)
-        
-        
         // Disables layer interpolation, raw pixels
         view.layer.magnificationFilter = .nearest
         view.layer.minificationFilter = .nearest
-        
+        view.enableSetNeedsDisplay = true
+        view.isPaused = true
         return view
     }
 
     func updateUIView(_ uiView: MTKView, context: Context) {
+        uiView.drawableSize = CGSize(
+            width: CGFloat(width) * zoomScale,
+            height: CGFloat(height) * zoomScale
+        )
         context.coordinator.update(
             floats: floats,
             width: width,
@@ -155,9 +134,12 @@ struct MetalFITSView: UIViewRepresentable {
                     bscale: Float, bzero: Float,
                     physMin: Float, physMax: Float,
                     clipPct: SIMD2<Float>, scaleModeIndex: UInt, colorMapIndex: UInt) {
+            // Prevent creating textures with invalid dimensions
+            guard width > 0 && height > 0 else { return }
             if texture == nil || texture!.width != width || texture!.height != height {
                 let desc = MTLTextureDescriptor.texture2DDescriptor(
                     pixelFormat: .r32Float, width: width, height: height, mipmapped: false)
+                desc.usage = [.shaderRead]
                 texture = device.makeTexture(descriptor: desc)
             }
             let region = MTLRegionMake2D(0, 0, width, height)
@@ -198,17 +180,10 @@ struct MetalFITSView: UIViewRepresentable {
 
 /// MARK: - ContentView
 /// Core SwiftUI view that:
-/// - Hosts the NavigationView and toolbar.
+/// - Hosts the NavigationSplitView and toolbar.
 /// - Manages FITS loading phases and UI states.
 /// - Coordinates rendering triggers and parameter adjustments.
 struct ContentView: View {
-    /// The underlying FITSDocument provided by the DocumentGroup.
-    private let document: FITSDocument
-
-    /// Initializes the ContentView with a reference to the loaded FITS document.
-    init(document: FITSDocument) {
-        self.document = document
-    }
 
     /// MARK: - Loading Phases
     /// Represents the various states of file loading and rendering.
@@ -227,7 +202,10 @@ struct ContentView: View {
     // - headerDict: parsed FITS header key-value pairs
     // ==========================================================================
     @State private var phase: Phase = .loading
-    @State private var hasLoaded = false
+
+    // Manual document picker state
+    @State private var showPicker: Bool = false
+    @State private var documentData: Data = Data()
 
     // FITS data
     @State private var fitsFloats: [Float] = []
@@ -237,37 +215,43 @@ struct ContentView: View {
     @State private var bzero: Double = 0.0
 
     // Rendering state
-    @State private var uiImage: UIImage? = nil
     @State private var scaleMode: ScaleMode = .linear
     @State private var clipMinPct: Double = 0
     @State private var clipMaxPct: Double = 100
     @State private var colorMap: ColorMap = .gray
-    @State private var showPicker = true
     @State private var showSidebar = true
 
     @State private var zoomScale: CGFloat = 1.0
-    @State private var lastZoomValue: CGFloat = 1.0
     @State private var panOffset: CGSize = .zero
-    @State private var lastPanOffset: CGSize = .zero
+    // Live scale factor during an active pinch gesture
+    @GestureState private var gestureScale: CGFloat = 1.0
+    // Live translation during an active drag gesture
+    @GestureState private var gesturePan: CGSize = .zero
 
     @State private var showHeader = false
     @State private var headerDict: [String: String] = [:]
 
-    // For Metal rendering: store computed low/high values
-    @State private var lowVal: Float = 0
-    @State private var highVal: Float = 1
 
-    /// Subject used to debounce and throttle rendering requests on parameter changes.
-    private let renderTrigger = PassthroughSubject<Void, Never>()
-    /// Holds the cancellable for the Combine pipeline that throttles render updates.
-    @State private var renderCancellable: AnyCancellable?
+    // The selected file name for toolbar title
+    @State private var fileName: String = ""
+
+
 
     // ==========================================================================
     // MARK: - View Body
     // Builds the main NavigationView and dynamic content based on `phase`.
     // ==========================================================================
     var body: some View {
-        NavigationView {
+        NavigationSplitView {
+            // Sidebar
+            VStack(alignment: .leading, spacing: 16) {
+                Button("Open File") { showPicker = true }
+                Button("Settings") { }
+                Button("Contours") { }
+                Spacer()
+            }
+            .padding()
+        } detail: {
             Group {
                 switch phase {
                 case .selectFile: selectScreen
@@ -276,7 +260,8 @@ struct ContentView: View {
                 case .error(let msg): errorScreen(msg)
                 }
             }
-            .navigationTitle("FITS Viewer")
+            .navigationTitle(fileName.isEmpty ? "FITS Viewer" : fileName)
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { showHeader.toggle() }) {
@@ -294,51 +279,44 @@ struct ContentView: View {
                     }
                 }
             }
-        }
-        .sheet(isPresented: $showHeader) {
-            NavigationView {
-                List(headerDict.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
-                    HStack {
-                        Text(key).bold()
-                        Spacer()
-                        Text(value)
+            .sheet(isPresented: $showHeader) {
+                NavigationView {
+                    List(headerDict.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
+                        HStack {
+                            Text(key).bold()
+                            Spacer()
+                            Text(value)
+                        }
                     }
-                }
-                .navigationTitle("FITS Header")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { showHeader = false }
+                    .navigationTitle("FITS Header")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { showHeader = false }
+                        }
                     }
                 }
             }
         }
         .onAppear {
-//            // Throttle live updates to avoid stutter on large files
-//            renderCancellable = renderTrigger
-//                // at most 20 updates per second
-//                .throttle(for: .milliseconds(50),
-//                          scheduler: DispatchQueue.global(),
-//                          latest: true)
-//                .sink { _ in
-//                    // generate the new UIImage off the main thread
-//                    let raw = renderToUIImage()
-//                    let maxDim = max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
-//                    let thumb = downsample(raw, maxDimension: maxDim)
-//                    // push it back to the UI
-//                    DispatchQueue.main.async { uiImage = thumb }
-//                }
+            showPicker = true
         }
-        .task {
-            guard !hasLoaded else { return }
-            hasLoaded = true
-            // write document.data to temp URL
-            let tempURL = FileManager.default.temporaryDirectory
-                .appendingPathComponent("temp.fits")
-            do {
-                try document.data.write(to: tempURL)
-                loadFitsAsync(tempURL)
-            } catch {
-                phase = .error("Failed to load document data: \(error)")
+        .sheet(isPresented: $showPicker) {
+            DocumentPicker { url in
+                guard url.startAccessingSecurityScopedResource() else {
+                    phase = .error("Permission denied to access file")
+                    showPicker = false
+                    return
+                }
+                defer { url.stopAccessingSecurityScopedResource() }
+                do {
+                    documentData = try Data(contentsOf: url)
+                    fileName = url.lastPathComponent
+                    loadFitsAsync(data: documentData)
+                    phase = .viewing
+                } catch {
+                    phase = .error(error.localizedDescription)
+                }
+                showPicker = false
             }
         }
         .onChange(of: phase) { newPhase in
@@ -347,16 +325,15 @@ struct ContentView: View {
                 fitsFloats.removeAll(keepingCapacity: false)
                 fitsWidth = 0
                 fitsHeight = 0
-                uiImage = nil
             }
         }
     }
+
 
     /// Screen shown when no file is selected, prompting the user to open a FITS file.
     private var selectScreen: some View {
         VStack(spacing: 20) {
             Text("Select a FITS file to view")
-            Button("Open FITS File") { showPicker = true }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -410,42 +387,34 @@ struct ContentView: View {
                     physMax: physMaxValue,
                     clipPct: clipPctValue,
                     scaleModeIndex: scaleIndex,
-                    colorMapIndex: mapIndex
+                    colorMapIndex: mapIndex,
+                    zoomScale: $zoomScale
                 )
-                // Maintain the image's aspect ratio
-                .aspectRatio(
-                    CGFloat(fitsWidth) / CGFloat(fitsHeight),
-                    contentMode: .fit
+                .aspectRatio(CGFloat(fitsWidth) / CGFloat(fitsHeight), contentMode: .fit)
+                .scaleEffect(zoomScale * gestureScale)
+                // Combine cumulative and active pan
+                .offset(
+                    x: panOffset.width + gesturePan.width,
+                    y: panOffset.height + gesturePan.height
                 )
-                // Apply user-controlled scale and translation
-                .scaleEffect(zoomScale)
-                .offset(panOffset)
-                // Zoom gesture
                 .gesture(
-                    MagnificationGesture()
-                        .onChanged { value in
-                            let delta = value / lastZoomValue
-                            lastZoomValue = value
-                            zoomScale *= delta
-                        }
-                        .onEnded { _ in lastZoomValue = 1.0 }
-                )
-                // Pan gesture
-                .simultaneousGesture(
                     DragGesture()
-                        .onChanged { value in
-                            let translation = value.translation
-                            let delta = CGSize(
-                                width: translation.width - lastPanOffset.width,
-                                height: translation.height - lastPanOffset.height
-                            )
-                            lastPanOffset = translation
-                            panOffset = CGSize(
-                                width: panOffset.width + delta.width,
-                                height: panOffset.height + delta.height
-                            )
+                        .updating($gesturePan) { value, state, _ in
+                            state = value.translation
                         }
-                        .onEnded { _ in lastPanOffset = .zero }
+                        .onEnded { value in
+                            panOffset.width += value.translation.width
+                            panOffset.height += value.translation.height
+                        }
+                )
+                .simultaneousGesture(
+                    MagnificationGesture()
+                        .updating($gestureScale) { value, state, _ in
+                            state = value
+                        }
+                        .onEnded { finalValue in
+                            zoomScale *= finalValue
+                        }
                 )
                 .frame(width: geo.size.width, height: geo.size.height)
             }
@@ -483,13 +452,11 @@ struct ContentView: View {
                         HStack {
                             Text("Min: \(Int(clipMinPct))%")
                             Slider(value: $clipMinPct, in: 0...clipMaxPct)
-                                .onChange(of: clipMinPct) { _ in /*renderTrigger.send() */}
                         }
                         // Max slider
                         HStack {
                             Text("Max: \(clipMaxPct, specifier: clipMaxPct.truncatingRemainder(dividingBy: 1)==0 ? "%.0f" : "%.2f")%")
                             Slider(value: $clipMaxPct, in: clipMinPct...100)
-                                .onChange(of: clipMaxPct) { _ in /*renderTrigger.send()*/ }
                         }
                     }
 
@@ -513,8 +480,6 @@ struct ContentView: View {
             }
         }
         .background(Color(UIColor.lightGray))
-        .onChange(of: scaleMode)   { _,_ in /*renderTrigger.send()*/ }
-        .onChange(of: colorMap)    { _,_ in /*renderTrigger.send()*/ }
         .animation(.easeInOut, value: showSidebar)
     }
     
@@ -530,94 +495,20 @@ struct ContentView: View {
 
     /// MARK: - Asynchronous FITS Loading
     /// Loads and parses the FITS file off the main thread, then triggers rendering.
-    private func loadFitsAsync(_ url: URL) {
-        // Clearing previous data to free memory
+    private func loadFitsAsync(data: Data) {
         fitsFloats.removeAll(keepingCapacity: false)
-        uiImage = nil
         phase = .loading
         DispatchQueue.global(qos: .userInitiated).async {
-            // Request permission to access the file if needed
-            let ok = url.startAccessingSecurityScopedResource()
-            defer { if ok { url.stopAccessingSecurityScopedResource() } }
-            guard ok else {
-                // If permission denied, show error on main thread
-                DispatchQueue.main.async { phase = .error("Permission denied") }
-                return
-            }
             do {
-                // Try loading the FITS file and parse contents
-                try loadFITS(from: url)
+                try loadFITS(with: data)
                 clipMinPct = 0; clipMaxPct = 100
-//                renderTrigger.send()
-                // Switch to viewing phase on main thread
                 DispatchQueue.main.async { phase = .viewing }
             } catch {
-                // Show error if loading or parsing fails
                 DispatchQueue.main.async { phase = .error(error.localizedDescription) }
             }
         }
     }
-
-    /// MARK: - CPU Rendering Pipeline
-    /// Converts the raw float buffer into a UIImage:
-    /// 1. Applies BSCALE/BZERO and scale mode transforms.
-    /// 2. Computes percentile-based clipping.
-    /// 3. Maps float values to RGBA bytes using the selected color map.
-    /// 4. Constructs a CGImage and wraps it in UIImage.
-//    private func renderToUIImage() -> UIImage {
-//        // Apply bzero/bscale to get physical values
-//        let phys = fitsFloats.map { Float(bzero) + Float(bscale) * $0 }
-//        // Sort values for percentile clipping
-//        let sorted = phys.sorted()
-//        let count = sorted.count
-//        // Compute integer indices based on rounded percentiles
-//        let idxScale = Double(count - 1) / 100.0
-//        let lowIndex  = max(0, min(count-1, Int(round(clipMinPct * idxScale))))
-//        let highIndex = max(0, min(count-1, Int(round(clipMaxPct * idxScale))))
-//        let lv    = sorted[lowIndex]
-//        let hv   = sorted[highIndex]
-//        // Save for Metal rendering
-//        DispatchQueue.main.async {
-//            self.lowVal = lv
-//            self.highVal = hv
-//        }
-//        let rng = (hv - lv) != 0 ? (hv - lv) : 1
-//        // Map to RGBA pixels using color map
-//        var pixels = [UInt8](repeating: 0, count: fitsWidth * fitsHeight * 4)
-//        for i in 0..<count {
-//            var t = (phys[i] - lv) / rng
-//            if !t.isFinite { t = 0 }
-//            t = min(max(t, 0), 1)
-//            let (r,g,b): (Float,Float,Float)
-//            switch colorMap {
-//            case .gray: (r,g,b) = (t,t,t)
-//            case .hot:
-//                if t < 0.33 { (r,g,b) = (t*3,0,0) }
-//                else if t < 0.66 { (r,g,b) = (1,(t-0.33)*3,0) }
-//                else { (r,g,b) = (1,1,(t-0.66)*3) }
-//            case .jet:
-//                func f(_ x: Float) -> Float { min(max(1.5-abs(4*t-x),0),1) }
-//                (r,g,b) = (f(3),f(2),f(1))
-//            }
-//            pixels[i*4+0] = UInt8(clamping: Int(min(max(r,0),1)*255))
-//            pixels[i*4+1] = UInt8(clamping: Int(min(max(g,0),1)*255))
-//            pixels[i*4+2] = UInt8(clamping: Int(min(max(b,0),1)*255))
-//            pixels[i*4+3] = 255
-//        }
-//        // Create CGImage and wrap in UIImage
-//        let provider = CGDataProvider(data: Data(pixels) as CFData)!
-//        let cgImage = CGImage(
-//            width: fitsWidth, height: fitsHeight,
-//            bitsPerComponent: 8, bitsPerPixel: 32,
-//            bytesPerRow: fitsWidth * 4,
-//            space: CGColorSpaceCreateDeviceRGB(),
-//            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
-//            provider: provider, decode: nil,
-//            shouldInterpolate: false, intent: .defaultIntent
-//        )!
-//        return UIImage(cgImage: cgImage)
-//    }
-
+    
     /// MARK: - FITS File Parsing
     /// Low-level parser that:
     /// 1. Reads header blocks of 2880 bytes until 'END' card.
@@ -625,8 +516,7 @@ struct ContentView: View {
     /// 3. Calculates data block size from NAXIS and BITPIX.
     /// 4. Decodes the first 2D image HDU into floats.
     /// 5. Skips non-image HDUs safely.
-    private func loadFITS(from url: URL) throws {
-        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+    private func loadFITS(with data: Data) throws {
         var offset = 0
 
         // Loop through all Header/Data Units (HDUs) in the file
@@ -784,17 +674,23 @@ extension String {
     }
 }
 
-/// MARK: - Downsampling Helper
-/// Creates a thumbnail by leveraging CGImageSource to limit memory usage
-/// when displaying large images.
-private func downsample(_ image: UIImage, maxDimension: CGFloat) -> UIImage {
-    guard let data = image.pngData() else { return image }
-    let options: [CFString: Any] = [
-        kCGImageSourceShouldCache: false,
-        kCGImageSourceCreateThumbnailFromImageAlways: true,
-        kCGImageSourceThumbnailMaxPixelSize: maxDimension
-    ]
-    let source = CGImageSourceCreateWithData(data as CFData, nil)!
-    let cgThumb = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)!
-    return UIImage(cgImage: cgThumb)
+
+// MARK: - DocumentPicker for manual file selection
+struct DocumentPicker: UIViewControllerRepresentable {
+    var onPick: (URL) -> Void
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [UTType.fitsFile])
+        picker.delegate = context.coordinator
+        return picker
+    }
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let parent: DocumentPicker
+        init(parent: DocumentPicker) { self.parent = parent }
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            parent.onPick(url)
+        }
+    }
 }

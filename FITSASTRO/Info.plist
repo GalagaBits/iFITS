@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+   Info.plist
+   FITSASTRO
+
+   Created by Derod Deal on 6/26/25.
+   Copyright (c) 2025 ___ORGANIZATIONNAME___. All rights reserved.
+-->
+<plist version="1.0">
+<dict>
+
+  <!-- Declare FITS file UTI -->
+  <key>UTExportedTypeDeclarations</key>
+  <dict>
+    <key>com.yourcompany.fits</key>
+    <dict>
+      <key>UTTypeDescription</key>
+      <string>FITS File</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>fits</string>
+        </array>
+        <key>public.mime-type</key>
+        <string>application/fits</string>
+      </dict>
+    </dict>
+  </dict>
+
+
+ 
+ <!-- Declare FITS file type -->
+ <key>CFBundleDocumentTypes</key>
+ <array>
+   <dict>
+     <key>CFBundleTypeName</key>
+     <string>FITS File</string>
+     <key>LSItemContentTypes</key>
+     <array>
+       <string>com.yourcompany.fits</string>
+     </array>
+     <key>CFBundleTypeRole</key>
+     <string>Viewer</string>
+   </dict>
+ </array>
+
+ <!-- Allow opening documents in place -->
+ <key>LSSupportsOpeningDocumentsInPlace</key>
+ <true/>
+
+    </dict>
+</plist>
