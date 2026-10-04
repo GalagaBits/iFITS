@@ -1,0 +1,638 @@
+//
+//  ContentView.swift
+//  iFITS Start
+//
+//  The main window: shared state and the view layout (body).
+//  Feature code lives in ContentView+*.swift files in each feature's folder.
+//
+
+import SwiftUI
+import UIKit
+import UniformTypeIdentifiers
+import Combine
+
+struct ContentView: View {
+    let modes = ["V", "A", "R", "S"]
+    @State var selectedMode = "V"
+
+    @State var showPicker = false
+    @State var fitsImage: UIImage? = nil
+    @State var isLoading = false
+    @State var errorMessage: String? = nil
+    @State var headerDict: [String: String] = [:]
+
+    // Zoom / Pan State
+    @State var scale: CGFloat = 1.0
+    @State var offset: CGSize = .zero
+    @State var viewportSize: CGSize = .zero
+
+    let minScale: CGFloat = 0.2
+    let keyboardPanStep: CGFloat = 60      // points per arrow-key press
+    let keyboardZoomStep: CGFloat = 1.25   // zoom factor per ⌘+ / ⌘- press
+
+    /// At full zoom-in, about this many image pixels span the screen's shorter side.
+    /// Lower = you can zoom in further. (6 ≈ each pixel ~140 pt on an 11" iPad.)
+    let pixelsAcrossAtMaxZoom: CGFloat = 6
+
+    /// Maximum zoom, based on the image's size and the screen/window size:
+    /// you can always zoom in until only a handful of image pixels fill the screen,
+    /// whether the image is 50 or 10,000 pixels wide. Never less than 4×.
+    var maxScale: CGFloat {
+        guard viewportSize.width > 0, viewportSize.height > 0,
+              imageWidth > 0, imageHeight > 0 else { return 50 }
+        let baseScale = max(viewportSize.width / imageWidth, viewportSize.height / imageHeight) // pt per pixel at 1×
+        let maxPointsPerPixel = min(viewportSize.width, viewportSize.height) / pixelsAcrossAtMaxZoom
+        return max(4, maxPointsPerPixel / baseScale)
+    }
+
+    // Grid State
+    @State var showGrid = false
+    @State var imageWidth: CGFloat = 1.0
+    @State var imageHeight: CGFloat = 1.0
+    @State var wcs = WCS(header: [:])
+
+    // Render Configuration (Visualization mode)
+    @State var renderSettings = RenderSettings()
+    @State var clipSelection: ClipSelection = .percentile(99.9)
+    @State var imageStats: ImageStats? = nil
+    @State var renderer = FITSRenderer()
+    @State var panelStage: PanelStage = .full
+    @State var panelHeight: CGFloat = 0
+
+    /// Keyboard focus for the image area. iPadOS needs *something* in the window to hold focus,
+    /// or the menu bar shows "No Menu Items" and no keyboard shortcut works.
+    @FocusState var imageFocused: Bool
+
+    // Pixel inspector (V / R / S modes): the pixel last hovered (trackpad / Pencil)
+    // or double-tapped. Stays put when you switch input devices.
+    @State var inspectedPixel: InspectedPixel? = nil
+
+    /// Double-tap only inspects once individual pixels are at least this big on screen (points).
+    let minPixelSizeForTapInspect: CGFloat = 8
+
+    // Annotations (A mode). Kept for the whole session, so they survive mode switches.
+    @State var annotations = AnnotationModel()
+    @Namespace var dockNamespace
+
+    // Regions (R mode). Also kept for the whole session and drawn in every mode.
+    @State var regionStore = RegionStore()
+    /// The drag that's drawing or editing a region right now, if any.
+    @State var regionDrag: RegionDrag? = nil
+    @State var regionPanelExpanded = true
+
+    // Statistics (S mode)
+    /// The top-right statistics box. Closable; tapping S (even when already in S) shows it again.
+    @State var showStatsBox = false
+    @State var regionStats: RegionStatistics? = nil
+    @State var statsPanelExpanded = true
+    /// Changes every time a file is loaded, so statistics are recomputed.
+    @State var imageGeneration = 0
+
+    // Cubes (C mode): NAXIS ≥ 3
+    /// The loaded cube (nil for a plain 2-D image).
+    @State var cubeSource: CubeSource? = nil
+    @State var animator = CubeAnimator()
+    @State var planeLoader = CubePlaneLoader()
+    /// The plane last asked for (so the same plane isn't decoded twice).
+    @State var requestedPlane = 0
+    @State var animatorExpanded = true
+    /// The small bottom-right animator, shown in every mode once the animator is collapsed.
+    @State var showMiniAnimator = false
+    /// The mode to go back to when cube mode is turned off.
+    @State var modeBeforeCube = "V"
+    /// The open file's security-scoped access stays on while it's loaded: cube planes are read
+    /// from the (memory-mapped) file as they're shown.
+    @State var scopedURL: URL? = nil
+
+    struct PlaybackKey: Equatable {
+        let playing: Bool
+        let framesPerSecond: Int
+    }
+
+    var playbackKey: PlaybackKey {
+        PlaybackKey(playing: animator.isPlaying && cubeSource != nil, framesPerSecond: animator.framesPerSecond)
+    }
+
+    // Region files (.reg)
+    @State var importKind: ImportKind = .fits
+    @State var regionExportDocument: RegionFileDocument? = nil
+    @State var showRegionExporter = false
+
+    /// What the file picker is opening.
+    enum ImportKind {
+        case fits, regions
+
+        var contentTypes: [UTType] {
+            switch self {
+            case .fits: [.fitsFile]
+            case .regions: [RegionFileDocument.regionType, UTType(filenameExtension: "reg") ?? .plainText,
+                            .plainText, .data]
+            }
+        }
+    }
+
+    /// What the statistics are computed for. A new value starts a new computation.
+    struct StatsRequest: Equatable {
+        let generation: Int
+        let region: FITSRegion?
+    }
+
+    // FITS header window ("H" button)
+    @State var headerCards: [FITSHeaderCard] = []
+    @State var fileName = ""
+    /// Fallback when the app can't open extra windows (shown as a sheet instead).
+    @State var headerSheetDocument: FITSHeaderDocument? = nil
+
+    // Saving annotations into the FITS file
+    @State var loadedFileURL: URL? = nil
+    @State var copyDocument: FITSFileDocument? = nil
+    @State var showCopyExporter = false
+    @State var saveMessage: String? = nil
+    @State var saveError: String? = nil
+    @Environment(\.openWindow) var openWindow
+    /// Shared with the menu bar (FITSMenuCommands).
+    @EnvironmentObject var commandCenter: FITSCommandCenter
+
+    var showRenderPanel: Bool {
+        selectedMode == "V" && fitsImage != nil && imageStats != nil
+    }
+
+    var isAnnotating: Bool {
+        selectedMode == "A" && fitsImage != nil
+    }
+
+    /// Whether anything is docked at the bottom (for the WCS grid's label insets).
+    var dockVisible: Bool {
+        fitsImage != nil && (showRenderPanel || isAnnotating || selectedMode == "R" || selectedMode == "S"
+                             || (selectedMode == "C" && cubeSource != nil))
+    }
+
+    /// The small bottom-right animator is on screen.
+    var miniAnimatorVisible: Bool {
+        showMiniAnimator && cubeSource != nil && fitsImage != nil && !(selectedMode == "C" && animatorExpanded)
+    }
+
+    /// The image has RA/Dec world coordinates.
+    var hasCelestialWCS: Bool {
+        wcs.isCelestial && headerDict["CTYPE1"] != nil
+    }
+
+    /// Pixel value units from the header (BUNIT).
+    var valueUnit: String {
+        headerDict["BUNIT"]?.trimmingCharacters(in: .whitespaces) ?? ""
+    }
+
+    var statsRequest: StatsRequest? {
+        guard fitsImage != nil, showStatsBox || selectedMode == "S" else { return nil }
+        return StatsRequest(generation: imageGeneration, region: regionStore.statsRegion)
+    }
+
+    /// Animate view changes only when there's nothing drawn, so annotations never lag the image.
+    var viewChangeAnimation: Animation? {
+        annotations.hasStrokes ? nil : .snappy
+    }
+
+    /// Current zoom limit, shared with the annotation layer.
+    var currentMaxScale: CGFloat { maxScale }
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                // Background Layer: Image and States
+                ZStack {
+                    if isLoading {
+                        ProgressView("Loading FITS...")
+                    } else if let error = errorMessage {
+                        Text(error).foregroundColor(.red)
+                    } else if let uiImage = fitsImage {
+                        GeometryReader { geo in
+                            Image(uiImage: uiImage)
+                                .resizable()
+                                .interpolation(.none)
+                                .aspectRatio(contentMode: .fill)
+                            // Pin the content to exactly the viewport size so its center
+                            // (the scaleEffect anchor) is the same as the viewport's center.
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .scaleEffect(scale)
+                            .offset(offset)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                            // The grid is drawn on top at screen resolution (not scaled
+                            // with the image), so lines stay sharp and text stays one size.
+                            .overlay {
+                                if showGrid {
+                                    WCSGridView(wcs: wcs,
+                                                imageWidth: imageWidth,
+                                                imageHeight: imageHeight,
+                                                scale: scale,
+                                                offset: offset,
+                                                labelInsets: EdgeInsets(top: 80, leading: 130,
+                                                                        bottom: dockVisible ? panelHeight + 44 : 24,
+                                                                        trailing: 12))
+                                        .allowsHitTesting(false)
+                                }
+                            }
+                            // Gestures live on an untransformed overlay, so every location
+                            // is measured in plain viewport coordinates.
+                            .overlay {
+                                ZoomPanGestureView(
+                                    onTransform: { translation, scaleFactor, anchor in
+                                        applyTransform(translation: translation, scaleFactor: scaleFactor, anchor: anchor)
+                                    },
+                                    onHover: { point, source in
+                                        inspect(atScreen: point, in: geo.size, source: source)
+                                    },
+                                    onDoubleTap: { point in
+                                        // Touch: only once individual pixels are visible.
+                                        guard pointsPerImagePixel(in: geo.size) >= minPixelSizeForTapInspect else { return }
+                                        inspect(atScreen: point, in: geo.size, source: .touch)
+                                    },
+                                    onInteraction: {
+                                        // Tapping or moving the image stops editing Clip min / max
+                                        // and gives keyboard focus back to the image (arrow keys).
+                                        endTextEditing()
+                                        restoreImageFocus()
+                                    },
+                                    // Tapping a region selects it (and switches to R mode).
+                                    onTap: { point in handleImageTap(atScreen: point) },
+                                    // In R mode, drags draw, move, stretch and rotate regions.
+                                    regionDragBegan: { point in beginRegionDrag(atScreen: point) },
+                                    regionDragChanged: { point in continueRegionDrag(atScreen: point) },
+                                    regionDragEnded: { point in endRegionDrag(atScreen: point) },
+                                    // Trackpad / mouse pointer shape over regions.
+                                    pointerKind: { point in regionPointer(atScreen: point) })
+                            }
+                            // Outline of the inspected pixel (when it's big enough to see).
+                            .overlay {
+                                if let pixel = inspectedPixel, selectedMode != "A" {
+                                    InspectedPixelOutline(
+                                        rect: CGRect(x: pixel.column, y: pixel.row, width: 1, height: 1)
+                                            .applying(imageToScreenTransform(in: geo.size)))
+                                }
+                            }
+                            // Annotations: stored strokes drawn with the image's own transform
+                            // (always shown unless hidden), plus the PencilKit capture layer
+                            // on top (only touchable in A mode).
+                            .overlay {
+                                let toScreen = imageToScreenTransform(in: geo.size)
+                                ZStack {
+                                    AnnotationDisplayCanvas(model: annotations,
+                                                            strokeCount: annotations.strokes.count,
+                                                            imageWidth: imageWidth,
+                                                            imageHeight: imageHeight,
+                                                            scale: scale,
+                                                            offset: offset,
+                                                            viewportSize: geo.size,
+                                                            maxScale: currentMaxScale)
+                                        .allowsHitTesting(false)
+                                        .opacity(annotations.isVisible ? 1 : 0)
+                                    AnnotationCanvas(model: annotations,
+                                                     isActive: isAnnotating,
+                                                     fingerDrawing: annotations.fingerDrawing,
+                                                     screenToImage: toScreen.inverted(),
+                                                     onTransform: { translation, scaleFactor, anchor in
+                                                         applyTransform(translation: translation, scaleFactor: scaleFactor, anchor: anchor)
+                                                     },
+                                                     // A finger / pointer tap (not the Pencil) on a region selects it.
+                                                     onTap: { point in handleImageTap(atScreen: point) })
+                                    .allowsHitTesting(isAnnotating)
+                                }
+                            }
+                            // Regions, drawn on top of everything at screen resolution.
+                            .overlay {
+                                RegionOverlay(regions: regionStore.regions,
+                                              selectedID: regionStore.selectedID,
+                                              showHandles: selectedMode == "R",
+                                              imageToScreen: imageToScreenTransform(in: geo.size),
+                                              imageHeight: imageHeight)
+                            }
+                            .onChange(of: geo.size, initial: true) { _, newSize in
+                                viewportSize = newSize
+                            }
+                        }
+                    } else {
+                        Text("No FITS file loaded.")
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+                .ignoresSafeArea()
+                // The image area holds keyboard focus (no visible outline), so the window always
+                // has a focused view: that keeps the menu bar filled and the shortcuts working.
+                .focusable()
+                .focusEffectDisabled()
+                .focused($imageFocused)
+                // Arrow keys move the image (Shift = bigger steps) whenever the image area has focus.
+                .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
+                    let large = press.modifiers.contains(.shift)
+                    switch press.key {
+                    case .upArrow: moveView(dx: 0, dy: -1, large: large)
+                    case .downArrow: moveView(dx: 0, dy: 1, large: large)
+                    case .leftArrow: moveView(dx: -1, dy: 0, large: large)
+                    case .rightArrow: moveView(dx: 1, dy: 0, large: large)
+                    default: return .ignored
+                    }
+                    return .handled
+                }
+                // R mode: Esc puts the drawing tool away (or deselects); Delete removes the selected region.
+                .onKeyPress(.escape) {
+                    guard selectedMode == "R" else { return .ignored }
+                    if regionStore.tool != nil {
+                        regionStore.tool = nil
+                    } else if regionStore.selectedID != nil {
+                        regionStore.select(nil)
+                    } else {
+                        return .ignored
+                    }
+                    return .handled
+                }
+                .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+                    guard selectedMode == "R", regionStore.selectedID != nil else { return .ignored }
+                    regionStore.deleteSelected()
+                    return .handled
+                }
+                // Cubes: the space bar plays / pauses the animator.
+                .onKeyPress(.space) {
+                    guard cubeSource != nil else { return .ignored }
+                    animator.togglePlay()
+                    return .handled
+                }
+                // "Save as Copy…": lets you choose where the copy goes.
+                .fileExporter(isPresented: $showCopyExporter,
+                              document: copyDocument,
+                              contentType: FITSFileDocument.fitsType,
+                              defaultFilename: (fileName as NSString).deletingPathExtension + "_copy") { result in
+                    switch result {
+                    case .success(let url): showSaveMessage("Saved copy \(url.lastPathComponent)")
+                    case .failure(let error): saveError = error.localizedDescription
+                    }
+                    copyDocument = nil
+                    restoreImageFocus()
+                }
+
+                // Foreground Layer: Buttons
+                HStack {
+                    VStack(spacing: 35) {
+                        ForEach(modes, id: \.self) { mode in
+                            Button(action: { selectMode(mode) }) {
+                                ZStack {
+                                    if selectedMode == mode {
+                                        Circle()
+                                            .fill(.orange.opacity(0.95))
+                                    }
+
+                                    Circle()
+                                        .glassEffect(.regular, in: Circle())
+
+                                    Text(mode)
+                                        .font(.largeTitle)
+                                        .foregroundColor(.primary)
+                                }
+                                .frame(width: 70, height: 70)
+                                .contentShape(Circle())
+                                .hoverEffect(.lift)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 60)
+                    .padding(.leading, 40)
+
+                    Spacer()
+                }
+                // "Export Regions (.reg)…" (kept off the views that already have a file picker or
+                // exporter, since SwiftUI can mix them up when they share a view).
+                .fileExporter(isPresented: $showRegionExporter,
+                              document: regionExportDocument,
+                              contentType: RegionFileDocument.regionType,
+                              defaultFilename: (fileName as NSString).deletingPathExtension + "_regions") { result in
+                    switch result {
+                    case .success(let url): showSaveMessage("Exported regions to \(url.lastPathComponent)")
+                    case .failure(let error): saveError = error.localizedDescription
+                    }
+                    regionExportDocument = nil
+                    restoreImageFocus()
+                }
+
+                // Top right, under the toolbar buttons: the pixel inspector (not in A mode)
+                // and the statistics box (every mode, until closed).
+                if fitsImage != nil {
+                    VStack {
+                        HStack(alignment: .top) {
+                            Spacer()
+                            VStack(alignment: .trailing, spacing: 10) {
+                                if let pixel = inspectedPixel, selectedMode != "A" {
+                                    PixelInfoPanel(pixel: pixel,
+                                                   value: renderer.value(column: pixel.column, row: pixel.row),
+                                                   wcs: wcs,
+                                                   header: headerDict,
+                                                   imageHeight: Int(imageHeight),
+                                                   channel: cubeSource == nil ? 0 : animator.index(onAxis: 0))
+                                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
+                                }
+                                if showStatsBox {
+                                    StatisticsBox(regionName: regionStore.statsRegion?.name ?? "Entire Image",
+                                                  stats: regionStats,
+                                                  unit: valueUnit,
+                                                  onClose: { withAnimation(.snappy) { showStatsBox = false } })
+                                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
+                                }
+                            }
+                        }
+                        Spacer()
+                    }
+                    .padding(.top, 8)
+                    .padding(.trailing, 16)
+                }
+
+                // "Saved" confirmation, top center.
+                if let message = saveMessage {
+                    VStack {
+                        Text(message)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .glassEffect(.regular, in: Capsule())
+                        Spacer()
+                    }
+                    .padding(.top, 8)
+                    .allowsHitTesting(false)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                // Bottom dock: Render Configuration (V), the Annotation bar (A), Regions (R) or
+                // Statistics (S). They share one glass identity, so switching modes morphs one into the next.
+                VStack {
+                    Spacer()
+                    GlassEffectContainer(spacing: 24) {
+                        Group {
+                            if showRenderPanel, let stats = imageStats {
+                                RenderConfigPanel(settings: $renderSettings,
+                                                  stage: $panelStage,
+                                                  clipSelection: clipSelection,
+                                                  stats: stats,
+                                                  glassNamespace: dockNamespace,
+                                                  onSelectPercentile: { applyPercentile($0) },
+                                                  onManualClip: { setManualClip($0, $1) })
+                            } else if isAnnotating {
+                                AnnotationBar(model: annotations, glassNamespace: dockNamespace)
+                            } else if selectedMode == "R", fitsImage != nil {
+                                RegionPanel(store: regionStore,
+                                            expanded: $regionPanelExpanded,
+                                            wcs: wcs,
+                                            hasWCS: hasCelestialWCS,
+                                            glassNamespace: dockNamespace,
+                                            onImport: { importRegions() },
+                                            onExport: { exportRegions() })
+                            } else if selectedMode == "S", fitsImage != nil {
+                                StatisticsDockPanel(store: regionStore,
+                                                    expanded: $statsPanelExpanded,
+                                                    stats: regionStats,
+                                                    unit: valueUnit,
+                                                    glassNamespace: dockNamespace)
+                            } else if selectedMode == "C", cubeSource != nil, fitsImage != nil {
+                                AnimatorPanel(animator: animator,
+                                              expanded: $animatorExpanded,
+                                              glassNamespace: dockNamespace)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: isAnnotating ? .leading : .center)
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 8)
+                }
+
+                // Small animator, bottom right (above the dock), in every mode once the animator
+                // has been collapsed, until closed with its ✕.
+                if miniAnimatorVisible {
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            MiniAnimatorBar(animator: animator) {
+                                withAnimation(.snappy) {
+                                    showMiniAnimator = false
+                                    animator.isPlaying = false
+                                }
+                            }
+                        }
+                    }
+                    .padding(.trailing, 24)
+                    .padding(.bottom, dockVisible ? panelHeight + 20 : 16)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .onChange(of: renderSettings) { _, newSettings in
+                renderer.request(newSettings)
+            }
+            .onAppear {
+                renderer.onImage = { image in
+                    if let image { fitsImage = image }
+                }
+                planeLoader.onPlane = { result in applyPlane(result) }
+            }
+            // Cubes: show the plane for the chosen channel(s).
+            .onChange(of: animator.indices) { _, _ in
+                showCurrentPlane()
+            }
+            // Collapsing the animator brings up the small bottom-right animator.
+            .onChange(of: animatorExpanded) { _, expanded in
+                if !expanded { withAnimation(.snappy) { showMiniAnimator = true } }
+            }
+            // Playback: one channel step per frame at the chosen frame rate.
+            .task(id: playbackKey) {
+                guard playbackKey.playing else { return }
+                let interval = 1.0 / Double(max(1, playbackKey.framesPerSecond))
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(interval))
+                    if Task.isCancelled { break }
+                    animator.tick()
+                }
+            }
+            // Point the menu bar (FITSMenuCommands) at this window, once. Menu items read and
+            // change the live state when used, so the menu bar never needs updating afterwards.
+            // (Every update makes iPadOS rebuild the whole menu bar, which can flicker or break.)
+            .onAppear {
+                if commandCenter.context == nil { commandCenter.context = commandContext }
+            }
+            // Give the image area keyboard focus at launch, whenever focus could have been lost
+            // (leaving A mode, closing the header sheet), and after editing Clip min / max.
+            .onAppear { restoreImageFocus() }
+            .onChange(of: selectedMode) { _, mode in
+                if mode != "A" { restoreImageFocus() }
+            }
+            .onChange(of: headerSheetDocument == nil) { _, closed in
+                if closed { restoreImageFocus() }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .iFITSRestoreImageFocus)) { _ in
+                restoreImageFocus()
+            }
+            // Statistics for the chosen region (or the whole image), recomputed off the main thread
+            // whenever the region, its size or position, or the image changes.
+            .task(id: statsRequest) {
+                await updateStatistics()
+            }
+            .toolbar { astroToolBar }
+            // The file name is the title. Tap it to rename the file (like Pages).
+            .navigationTitle(Binding(get: { fileName.isEmpty ? "iFITS" : fileName },
+                                     set: { renameLoadedFile(to: $0) }))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbarTitleMenu {
+                if loadedFileURL != nil {
+                    RenameButton()
+                    Divider()
+                    Button { saveToOriginal() } label: {
+                        Label("Save", systemImage: "square.and.arrow.down")
+                    }
+                    Button { saveCopy() } label: {
+                        Label("Save as Copy…", systemImage: "doc.on.doc")
+                    }
+                    Button { showHeader() } label: {
+                        Label("Show Header", systemImage: "list.bullet.rectangle")
+                    }
+                } else {
+                    Button { openFITSPicker() } label: {
+                        Label("Open FITS File…", systemImage: "folder")
+                    }
+                }
+            }
+            .alert("File Problem",
+                   isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(saveError ?? "")
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .sheet(item: $headerSheetDocument) { document in
+                HeaderWindowView(document: document, onClose: { headerSheetDocument = nil })
+            }
+            // SwiftUI's own file picker (FITS files, or .reg region files), which hands focus
+            // back to the app when it closes.
+            .fileImporter(isPresented: $showPicker, allowedContentTypes: importKind.contentTypes) { result in
+                if case .success(let url) = result {
+                    switch importKind {
+                    case .fits: loadFITSFile(url: url)
+                    case .regions: loadRegionFile(url: url)
+                    }
+                }
+                // The file picker took keyboard focus; hand it back (see restoreImageFocus).
+                restoreImageFocus()
+            }
+        }
+    }
+
+    // MARK: - Modes
+
+    func selectMode(_ mode: String) {
+        withAnimation(.bouncy(duration: 0.5, extraBounce: 0.1)) {
+            // Leaving cube mode while a cube is playing keeps the small animator on screen.
+            if selectedMode == "C", mode != "C", animator.isPlaying { showMiniAnimator = true }
+            selectedMode = mode
+            // Tapping S (even when S is already on) brings the statistics box back.
+            if mode == "S" { showStatsBox = true }
+        }
+    }
+}
