@@ -81,6 +81,41 @@ extension ContentView {
         showPicker = true
     }
 
+    /// A FITS file was picked. With more than one image HDU (e.g. JWST's SCI, ERR, DQ, WMAP), asks
+    /// which one to show; with one, opens it straight away.
+    func prepareToOpen(url: URL) {
+        let name = url.lastPathComponent
+        DispatchQueue.global(qos: .userInitiated).async {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url, options: .mappedIfSafe)
+                let images = FITSHDUList.scan(data).filter(\.isImage)
+                DispatchQueue.main.async {
+                    if images.isEmpty {
+                        saveError = "\(name) has no image to show. (Its HDUs are tables or empty.)"
+                    } else if images.count == 1 {
+                        loadFITSFile(url: url, hdu: images[0].index)
+                    } else {
+                        hduPicker = HDUPickerRequest(purpose: .open, url: url, hdus: images)
+                    }
+                }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async { saveError = "Couldn't open \(name): \(message)" }
+            }
+        }
+    }
+
+    /// The HDU picker's choice.
+    func choseHDU(_ hdu: FITSHDUInfo, for request: HDUPickerRequest) {
+        hduPicker = nil
+        switch request.purpose {
+        case .open: loadFITSFile(url: request.url, hdu: hdu.index)
+        case .noise: attachNoiseFile(url: request.url, hdu: hdu)
+        }
+    }
+
     // MARK: - Renaming the file (tap the title)
 
     /// Renames the loaded file on disk. The extension is kept if you leave it off. A bookmark made
@@ -150,20 +185,25 @@ extension ContentView {
 
     // MARK: - Loading a FITS file
 
-    func loadFITSFile(url: URL) {
+    /// Loads HDU `hdu` of the file (nil = the first image HDU).
+    /// keepView: keep the zoom, position and cube channel (used when the "_SNR_" file replaces the
+    /// image it was made from); a problem then shows as an alert and the current image stays.
+    func loadFITSFile(url: URL, hdu: Int? = nil, keepView: Bool = false) {
         isLoading = true
         errorMessage = nil
 
-        guard url.startAccessingSecurityScopedResource() else {
-            errorMessage = "Permission denied."
-            isLoading = false
-            return
-        }
+        // Files from the file picker need security-scoped access; files in the app's own
+        // folders don't (and return false here), so a false isn't an error by itself.
+        let scoped = url.startAccessingSecurityScopedResource()
 
         // Keep the current scaling/colormap/percentile when opening a new file.
         let baseSettings = renderSettings
         let percentile: Double
         if case .percentile(let p) = clipSelection { percentile = p } else { percentile = 99.9 }
+        // The channel on screen, to come back to (keepView).
+        let keepIndices = keepView ? animator.indices : []
+        let keepPlane = keepView ? cubeSource?.planeIndex(animator.indices) : nil
+        let keepImageSize = CGSize(width: imageWidth, height: imageHeight)
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -173,23 +213,40 @@ extension ContentView {
                 // DS9_REGIONS extensions), if any.
                 let savedAnnotations = FITSAnnotationStore.readDrawingData(from: data)
                 let savedRegions = FITSAnnotationStore.readRegionText(from: data)
-                let result = try FITSDecoder.loadFITS(with: data)
-                // Physical values = BZERO + BSCALE × stored value; BLANK (integer images) → NaN.
-                // Flipped so FITS row 1 is at the bottom, like CARTA / DS9 (north up, RA along x).
-                let pixels = FITSPhysical.flipRows(
-                    FITSPhysical.apply(result.floats, bscale: result.bscale, bzero: result.bzero,
-                                       header: result.headerDict),
-                    width: result.width, height: result.height)
-                let stats = ImageStats(values: pixels, width: result.width)
-                var settings = baseSettings
-                (settings.clipMin, settings.clipMax) = stats.clipRange(percentile: percentile)
-                let generatedImage = FITSRenderer.render(pixels, width: result.width,
-                                                         height: result.height, settings: settings)
+                let result = try FITSDecoder.loadFITS(with: data, hdu: hdu)
+                // Every HDU of the file (for the SNR page's noise menu), the shown HDU read straight
+                // from the file (SNR reads every channel), and the SNR extension of an "_SNR_" file.
+                let hdus = FITSHDUList.scan(data)
+                let shownHDU = hdus.first { $0.index == result.hduIndex }
+                let signal = shownHDU.flatMap { FITSImageReader(data: data, hdu: $0) }
+                let snrMap = hdus.first {
+                    $0.isImage && $0.index != result.hduIndex && $0.name.uppercased() == "SNR"
+                        && $0.axes == result.axisLengths
+                }.flatMap { FITSImageReader(data: data, hdu: $0) }
                 // NAXIS ≥ 3 with more than one plane: a cube.
                 let cube = CubeSource(data: data, width: result.width, height: result.height,
                                       bitpix: result.bitpix, dataOffset: result.dataOffset,
                                       bscale: result.bscale, bzero: result.bzero,
                                       axisLengths: result.axisLengths, header: result.headerDict)
+                // Physical values = BZERO + BSCALE × stored value; BLANK (integer images) → NaN.
+                // Flipped so FITS row 1 is at the bottom, like CARTA / DS9 (north up, RA along x).
+                // When keeping the view of a cube, start on the same channel.
+                let firstPlane = FITSPhysical.flipRows(
+                    FITSPhysical.apply(result.floats, bscale: result.bscale, bzero: result.bzero,
+                                       header: result.headerDict),
+                    width: result.width, height: result.height)
+                let keptPlane: (pixels: [Float], plane: Int)? = {
+                    guard let keepPlane, keepPlane > 0, let cube, keepPlane < cube.planeCount,
+                          let planePixels = cube.loadPlane(keepPlane) else { return nil }
+                    return (planePixels, keepPlane)
+                }()
+                let pixels = keptPlane?.pixels ?? firstPlane
+                let shownPlane = keptPlane?.plane ?? 0
+                let stats = ImageStats(values: pixels, width: result.width)
+                var settings = baseSettings
+                (settings.clipMin, settings.clipMax) = stats.clipRange(percentile: percentile)
+                let generatedImage = FITSRenderer.render(pixels, width: result.width,
+                                                         height: result.height, settings: settings)
 
                 DispatchQueue.main.async {
                     self.renderer.load(pixels, width: result.width, height: result.height,
@@ -222,26 +279,48 @@ extension ContentView {
                     self.regionStats = nil
                     self.imageGeneration += 1
 
-                    // Cube (or not): reset the animator to channel 0.
+                    // Cube (or not): reset the animator to channel 0 (or the kept channel).
                     self.planeLoader.reset()
-                    self.requestedPlane = 0
+                    self.requestedPlane = shownPlane
                     self.cubeSource = cube
                     self.animator.configure(cube?.axes ?? [])
+                    if shownPlane > 0, keepIndices.count == self.animator.indices.count {
+                        for (axis, index) in keepIndices.enumerated() {
+                            self.animator.setIndex(index, onAxis: axis)
+                        }
+                    }
                     if cube == nil {
                         self.showMiniAnimator = false
                         if self.selectedMode == "C" { self.selectMode(self.modeBeforeCube) }
                     }
 
+                    // HDUs, the image for SNR, and the SNR map for Pixel Info.
+                    self.loadToken = UUID()
+                    self.loadedHDUs = hdus
+                    self.loadedHDUIndex = result.hduIndex
+                    self.signalImage = signal
+                    self.snrImage = snrMap
+                    self.snr.imageChanged(
+                        candidates: hdus.filter {
+                            $0.isImage && $0.index != result.hduIndex && $0.name.uppercased() != "SNR"
+                        },
+                        signalAxes: signal?.axes ?? [])
+
                     // Keep reading access to this file while it's open (cube planes are read
                     // from it later); give up access to the previous file.
-                    if let previous = self.scopedURL { previous.stopAccessingSecurityScopedResource() }
-                    self.scopedURL = url
+                    if let previous = self.scopedURL, previous != url || scoped {
+                        previous.stopAccessingSecurityScopedResource()
+                    }
+                    self.scopedURL = scoped ? url : nil
                     self.imageWidth = CGFloat(result.width)
                     self.imageHeight = CGFloat(result.height)
 
-                    // Reset zoom / pan
-                    self.scale = 1.0
-                    self.offset = .zero
+                    // Reset zoom / pan (kept when the new image is the same size and keepView is on).
+                    let sameSize = keepImageSize == CGSize(width: result.width, height: result.height)
+                    if !(keepView && sameSize) {
+                        self.scale = 1.0
+                        self.offset = .zero
+                    }
 
                     self.isLoading = false
                     if generatedImage == nil {
@@ -249,9 +328,15 @@ extension ContentView {
                     }
                 }
             } catch {
+                let message = error.localizedDescription
                 DispatchQueue.main.async {
-                    url.stopAccessingSecurityScopedResource()
-                    self.errorMessage = error.localizedDescription
+                    if scoped { url.stopAccessingSecurityScopedResource() }
+                    if keepView {
+                        // The current image stays; just say what went wrong.
+                        self.saveError = "Couldn't open \(url.lastPathComponent): \(message)"
+                    } else {
+                        self.errorMessage = message
+                    }
                     self.isLoading = false
                 }
             }

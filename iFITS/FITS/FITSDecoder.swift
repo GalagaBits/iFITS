@@ -2,7 +2,7 @@
 //  FITSDecoder.swift
 //  iFITS Start
 //
-//  Reads a FITS file: header blocks, data offset, BITPIX decoding of the first image HDU.
+//  Reads a FITS file: header blocks, data offset, and BITPIX decoding of the chosen image HDU.
 //
 
 import Foundation
@@ -24,12 +24,16 @@ class FITSDecoder {
         var dataOffset: Int = 0
         var bitpix: Int = 0
         var axisLengths: [Int] = []
+        /// Which HDU this is (0 = primary).
+        var hduIndex: Int = 0
     }
 
-    // Extracted from ContentView
-    static func loadFITS(with data: Data) throws -> Result {
+    /// Loads HDU number `hdu` (0 = primary), or the first image HDU when `hdu` is nil.
+    /// Only the first plane is decoded; cubes read their other planes later.
+    static func loadFITS(with data: Data, hdu target: Int? = nil) throws -> Result {
         var offset = 0
         var finalResult: Result?
+        var hduIndex = 0
 
         while offset < data.count {
             let hduStartOffset = offset
@@ -85,13 +89,22 @@ class FITSDecoder {
                     }
                     elements *= naxis_i
                 }
-                dataSize = (abs(bitpix) / 8) * elements
+                // Tables can have a heap (PCOUNT bytes) after the rows.
+                let pcount = Int(currentHeaderDict["PCOUNT"] ?? "0") ?? 0
+                let gcount = Int(currentHeaderDict["GCOUNT"] ?? "1") ?? 1
+                dataSize = (abs(bitpix) / 8) * gcount * (pcount + elements)
             }
 
             let w = Int(currentHeaderDict["NAXIS1"] ?? "0") ?? 0
             let h = Int(currentHeaderDict["NAXIS2"] ?? "0") ?? 0
+            let xtension = (currentHeaderDict["XTENSION"] ?? "").trimmingCharacters(in: .whitespaces).uppercased()
+            let isImage = naxis >= 2 && w > 0 && h > 0 && bitpix != 0 && (hduIndex == 0 || xtension == "IMAGE")
 
-            if naxis >= 2 && w > 0 && h > 0 && bitpix != 0 {
+            if let target, hduIndex == target, !isImage {
+                throw NSError(domain: "FITS", code: -7, userInfo: [NSLocalizedDescriptionKey: "HDU \(target) isn't an image."])
+            }
+
+            if isImage && (target == nil || target == hduIndex) {
 
                 let loadedBscale = Double(currentHeaderDict["BSCALE"] ?? "1.0") ?? 1.0
                 let loadedBzero = Double(currentHeaderDict["BZERO"] ?? "0.0") ?? 0.0
@@ -115,11 +128,11 @@ class FITSDecoder {
                         let rv: Float
                         switch bitpix {
                         case 8: rv = Float(ptr.load(as: UInt8.self))
-                        case 16: rv = Float(Int16(bitPattern: UInt16(bigEndian: ptr.load(as: UInt16.self))))
-                        case 32: rv = Float(Int32(bitPattern: UInt32(bigEndian: ptr.load(as: UInt32.self))))
-                        case -32: rv = Float(bitPattern: UInt32(bigEndian: ptr.load(as: UInt32.self)))
-                        case -64: rv = Float(Double(bitPattern: UInt64(bigEndian: ptr.load(as: UInt64.self))))
-                        case 64: rv = Float(Int64(bitPattern: UInt64(bigEndian: ptr.load(as: UInt64.self))))
+                        case 16: rv = Float(Int16(bitPattern: UInt16(bigEndian: ptr.loadUnaligned(as: UInt16.self))))
+                        case 32: rv = Float(Int32(bitPattern: UInt32(bigEndian: ptr.loadUnaligned(as: UInt32.self))))
+                        case -32: rv = Float(bitPattern: UInt32(bigEndian: ptr.loadUnaligned(as: UInt32.self)))
+                        case -64: rv = Float(Double(bitPattern: UInt64(bigEndian: ptr.loadUnaligned(as: UInt64.self))))
+                        case 64: rv = Float(Int64(bitPattern: UInt64(bigEndian: ptr.loadUnaligned(as: UInt64.self))))
                         default: rv = 0
                         }
                         floats[i] = rv
@@ -129,12 +142,14 @@ class FITSDecoder {
                 let axisLengths = (1...naxis).map { Int(currentHeaderDict["NAXIS\($0)"] ?? "") ?? 0 }
                 finalResult = Result(floats: floats, width: w, height: h, bscale: loadedBscale, bzero: loadedBzero,
                                      headerDict: currentHeaderDict, headerCards: currentCards,
-                                     dataOffset: dataStartOffset, bitpix: bitpix, axisLengths: axisLengths)
-                break // Exit after loading the first valid HDU
+                                     dataOffset: dataStartOffset, bitpix: bitpix, axisLengths: axisLengths,
+                                     hduIndex: hduIndex)
+                break // Exit after loading the chosen HDU
             }
 
             let paddedDataSize = (dataSize + 2879) / 2880 * 2880
             offset = dataStartOffset + paddedDataSize
+            hduIndex += 1
 
             if offset <= hduStartOffset {
                 throw NSError(domain: "FITS", code: -3, userInfo: [NSLocalizedDescriptionKey: "Failed to advance in FITS file, file may be corrupt."])
@@ -143,6 +158,8 @@ class FITSDecoder {
 
         if let res = finalResult {
             return res
+        } else if let target {
+            throw NSError(domain: "FITS", code: -8, userInfo: [NSLocalizedDescriptionKey: "The file has no HDU \(target)."])
         } else {
             throw NSError(domain: "FITS", code: -1, userInfo: [NSLocalizedDescriptionKey: "No 2D image HDU found in the file."])
         }

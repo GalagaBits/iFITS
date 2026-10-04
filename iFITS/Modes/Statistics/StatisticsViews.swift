@@ -2,7 +2,7 @@
 //  StatisticsViews.swift
 //  iFITS Start
 //
-//  The statistics box (top right) and the S-mode dock.
+//  The statistics box (top right) and the S-mode dock (statistics and SNR pages).
 //
 
 import SwiftUI
@@ -101,39 +101,78 @@ struct StatisticsBox: View {
     }
 }
 
-/// S mode: pick the region to measure, and see its statistics.
-struct StatisticsDockPanel: View {
+/// S mode: two pages you swipe between, like the Home Screen. Page 1 picks the region to measure
+/// and shows its statistics; page 2 is the SNR page (noise, cutoff, Calculate SNR).
+struct StatisticsDockPanel<SNRPage: View>: View {
     @Bindable var store: RegionStore
     @Binding var expanded: Bool
+    /// 0 = statistics, 1 = SNR. Kept by ContentView, so it's remembered across mode switches.
+    @Binding var page: Int?
     let stats: RegionStatistics?
     let unit: String
     let glassNamespace: Namespace.ID
+    private let snrPage: SNRPage
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(store: RegionStore, expanded: Binding<Bool>, page: Binding<Int?>, stats: RegionStatistics?,
+         unit: String, glassNamespace: Namespace.ID, @ViewBuilder snrPage: () -> SNRPage) {
+        _store = Bindable(wrappedValue: store)
+        _expanded = expanded
+        _page = page
+        self.stats = stats
+        self.unit = unit
+        self.glassNamespace = glassNamespace
+        self.snrPage = snrPage()
+    }
 
     private var regionName: String { store.statsRegion?.name ?? "Entire Image" }
+    private var currentPage: Int { page ?? 0 }
 
     var body: some View {
         CollapsibleDock(expanded: $expanded, glassNamespace: glassNamespace) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 12) {
-                    Label("Statistics", systemImage: "sum")
-                        .font(.headline)
-                        .lineLimit(1)
-                        .fixedSize()
+                    pageTab("Statistics", systemImage: "sum", page: 0)
+                    pageTab("SNR", systemImage: "waveform.path.ecg", page: 1)
                     Spacer(minLength: 0)
-                    Text("Region")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    regionMenu
+                    if currentPage == 0 {
+                        Text("Region")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        regionMenu
+                    }
                     DockCollapseButton(expanded: $expanded)
                 }
                 Divider()
-                StatisticsGrid(stats: stats, unit: unit, showHeader: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                if store.statsCandidates.isEmpty {
-                    Text("Draw an ellipse, rectangle or point in R mode to measure part of the image.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+
+                // Swipe left / right between the pages; they snap into place one at a time.
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal) {
+                        HStack(alignment: .top, spacing: 0) {
+                            statisticsPage
+                                .padding(.horizontal, 2)
+                                .containerRelativeFrame(.horizontal)
+                                .id(0)
+                            snrPage
+                                .padding(.horizontal, 2)
+                                .containerRelativeFrame(.horizontal)
+                                .id(1)
+                        }
+                        .scrollTargetLayout()
+                    }
+                    .scrollTargetBehavior(.paging)
+                    .scrollPosition(id: $page)
+                    .scrollIndicators(.hidden)
+                    // Coming back to S mode (or expanding the dock) shows the page you left it on.
+                    .onAppear {
+                        guard currentPage != 0 else { return }
+                        let target = currentPage
+                        DispatchQueue.main.async { proxy.scrollTo(target, anchor: .leading) }
+                    }
                 }
+
+                pageDots
             }
         } mini: {
             HStack(spacing: 10) {
@@ -149,6 +188,52 @@ struct StatisticsDockPanel: View {
                     .font(.caption.weight(.bold))
             }
         }
+    }
+
+    private var statisticsPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            StatisticsGrid(stats: stats, unit: unit, showHeader: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if store.statsCandidates.isEmpty {
+                Text("Draw an ellipse, rectangle or point in R mode to measure part of the image.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Page title you can tap to go to that page.
+    private func pageTab(_ title: String, systemImage: String, page target: Int) -> some View {
+        Button {
+            withAnimation(reduceMotion ? nil : Animation.smooth(duration: 0.35)) { page = target }
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.headline)
+                .lineLimit(1)
+                .fixedSize()
+                .foregroundStyle(currentPage == target ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .accessibilityAddTraits(currentPage == target ? .isSelected : [])
+    }
+
+    /// Two dots under the pages, like the Home Screen's.
+    private var pageDots: some View {
+        HStack(spacing: 8) {
+            ForEach(0..<2, id: \.self) { i in
+                Circle()
+                    .fill(currentPage == i ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+                    .frame(width: 7, height: 7)
+                    .onTapGesture {
+                        withAnimation(reduceMotion ? nil : Animation.smooth(duration: 0.35)) { page = i }
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .animation(.snappy(duration: 0.2), value: currentPage)
+        .accessibilityHidden(true)
     }
 
     private var regionMenu: some View {

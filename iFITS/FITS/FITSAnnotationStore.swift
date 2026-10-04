@@ -70,6 +70,14 @@ nonisolated enum FITSAnnotationStore {
         return out
     }
 
+    /// Just the iFITS extensions (none if there's nothing to save), to append to a new file.
+    static func extensionHDUs(drawing: Data?, regionLines: [String]) -> Data {
+        var out = Data()
+        if let drawing, !drawing.isEmpty { out.append(makeDrawingHDU(drawing)) }
+        if !regionLines.isEmpty { out.append(makeRegionHDU(regionLines)) }
+        return out
+    }
+
     // MARK: Reading HDU layout
 
     private static func scan(_ data: Data) -> [HDU] {

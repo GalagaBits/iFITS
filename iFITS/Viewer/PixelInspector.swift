@@ -2,7 +2,7 @@
 //  PixelInspector.swift
 //  iFITS Start
 //
-//  Pixel inspector: the inspected pixel, its outline and the info panel.
+//  Pixel inspector: the inspected pixel, its outline and the info panel (with SNR).
 //
 
 import SwiftUI
@@ -46,7 +46,8 @@ struct InspectedPixelOutline: View {
 }
 
 /// Liquid Glass box with the pixel's coordinates, world coordinates and value, with units
-/// taken from the FITS header (BUNIT, CUNITn, CTYPEn, RADESYS, EQUINOX).
+/// taken from the FITS header (BUNIT, CUNITn, CTYPEn, RADESYS, EQUINOX), plus SNR and noise
+/// when an SNR file is open.
 struct PixelInfoPanel: View {
     let pixel: InspectedPixel
     let value: Float?
@@ -56,6 +57,8 @@ struct PixelInfoPanel: View {
     let imageHeight: Int
     /// Channel shown on axis 3 (0-based), for cubes.
     var channel = 0
+    /// Signal-to-noise ratio at this pixel, once an SNR file (made in S mode) is open.
+    var snr: Float? = nil
 
     private struct Row {
         let label: String
@@ -123,6 +126,17 @@ struct PixelInfoPanel: View {
         if let spectral = spectralRow { rows.append(spectral) }
 
         rows.append(Row(label: "Value", value: valueText, unit: text("BUNIT")))
+
+        // SNR = value / noise, from the SNR extension. The noise follows from the two.
+        if let snr {
+            rows.append(Row(label: "SNR", value: snr.isNaN ? "NaN" : String(format: "%.4g", Double(snr)), unit: ""))
+            if let value, value.isFinite, snr.isFinite, snr != 0 {
+                rows.append(Row(label: "Noise", value: String(format: "%.4g", Double(value / snr)), unit: text("BUNIT")))
+            }
+            if let cut = number("SNRCUT"), snr.isFinite, Double(snr) < cut {
+                rows.append(Row(label: "", value: "below SNR " + String(format: "%g", cut), unit: "", secondary: true))
+            }
+        }
         return rows
     }
 
