@@ -2,7 +2,7 @@
 //  ContentView+Toolbar.swift
 //  iFITS Start
 //
-//  Top toolbar: file title, V A R S modes, cube and AR buttons, header, grid.
+//  Top toolbar: file title, V A R S modes, cube, AR and Spectra buttons, header, grid.
 //
 
 import SwiftUI
@@ -15,7 +15,7 @@ extension ContentView {
         }
 
         // Groups of three, like Pages: iOS 26 draws each group as its own glass capsule.
-        // Cube mode, AR, and a spare button (placeholder for later).
+        // Cube mode, AR, and Spectra mode.
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button { toggleCubeMode() } label: {
                 CubeModeIcon()
@@ -38,9 +38,22 @@ extension ContentView {
                 .disabled(!canOpenAR)
                 .accessibilityLabel("AR: view the cube in 3-D")
 
-            Button {} label: { Image(systemName: "circle") }
-                .disabled(true)
-                .accessibilityHidden(true)
+            // Spectra: the spectrum of a pixel or region along the cube's spectral axis.
+            Button { toggleSpectraMode() } label: {
+                Image(systemName: "chart.xyaxis.line")
+                    .frame(width: 22, height: 22)
+                    .foregroundStyle(Color.primary)
+                    .padding(6)
+                    // Orange circle while Spectra mode is on, like the cube button.
+                    .background {
+                        if selectedMode == "Z" {
+                            Circle().fill(Color.orange.opacity(0.95))
+                        }
+                    }
+            }
+            .disabled(!canUseSpectra)
+            .opacity(canUseSpectra ? 1 : 0.4)
+            .accessibilityLabel(selectedMode == "Z" ? "Turn off Spectra mode" : "Spectra mode")
         }
 
         ToolbarSpacer(.fixed, placement: .topBarTrailing)

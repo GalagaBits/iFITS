@@ -16,7 +16,8 @@ extension ContentView {
         if selectedMode == "C" {
             selectMode(modeBeforeCube)
         } else {
-            modeBeforeCube = selectedMode
+            // Remember the V A R S mode (not Spectra) to come back to.
+            if modes.contains(selectedMode) { modeBeforeCube = selectedMode }
             animatorExpanded = true
             selectMode("C")
         }
@@ -59,6 +60,7 @@ extension ContentView {
         guard cubeSource != nil, fitsImage != nil else { return }
         switch command {
         case .toggleMode: toggleCubeMode()
+        case .toggleSpectra: toggleSpectraMode()
         case .playPause: animator.togglePlay()
         case .next: animator.step(1)
         case .previous: animator.step(-1)

@@ -10,7 +10,7 @@ import Combine
 
 /// Cube menu commands.
 enum CubeCommand {
-    case toggleMode, playPause, next, previous, first, last, showMiniAnimator
+    case toggleMode, toggleSpectra, playPause, next, previous, first, last, showMiniAnimator
 }
 
 /// What the frontmost FITS window shares with the menu bar. The bindings and closures read

@@ -132,8 +132,8 @@ enum ARAxisTicks {
         return values.map { (u: ($0 + 0.5) / Double(n), text: NiceTicks.label($0, step: step)) }
     }
 
-    /// (multiply header values by, unit to show, axis name).
-    private static func displayUnit(_ axis: CubeAxis) -> (Double, String, String) {
+    /// (multiply header values by, unit to show, axis name). Also used by the spectrum graph.
+    static func displayUnit(_ axis: CubeAxis) -> (Double, String, String) {
         let unit = axis.cunit.lowercased().replacingOccurrences(of: " ", with: "")
         let lo = axis.world(at: 0), hi = axis.world(at: max(0, axis.length - 1))
         let biggest = max(abs(lo), abs(hi))

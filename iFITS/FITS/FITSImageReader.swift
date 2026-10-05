@@ -100,6 +100,28 @@ nonisolated struct FITSImageReader: Sendable {
         return v
     }
 
+    /// Physical values of several runs of pixels in one plane (Spectra mode reads a region this way,
+    /// channel by channel). Each run is `count` pixels in a row starting at FITS-order index
+    /// `start` (y × width + x, 0-based, y from the bottom row). Values go to `out` one run after
+    /// another. False if the plane or a run is outside the image.
+    func values(plane: Int, runs: [PixelRun], into out: UnsafeMutablePointer<Float>) -> Bool {
+        let n = width * height
+        let bytes = bytesPerValue
+        guard n > 0, plane >= 0, plane < planeCount else { return false }
+        let start = dataStart + plane * n * bytes
+        guard start >= 0, start + n * bytes <= data.count else { return false }
+        return data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+            guard let base = raw.baseAddress else { return false }
+            var o = 0
+            for run in runs {
+                guard run.start >= 0, run.count > 0, run.start + run.count <= n else { return false }
+                decode(base + start + run.start * bytes, count: run.count, into: out + o)
+                o += run.count
+            }
+            return true
+        }
+    }
+
     /// Big-endian stored values → physical Floats.
     private func decode(_ src: UnsafeRawPointer, count n: Int, into out: UnsafeMutablePointer<Float>) {
         let s = bscale, z = bzero

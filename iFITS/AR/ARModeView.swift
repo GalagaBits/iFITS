@@ -3,14 +3,15 @@
 //  iFITS Start
 //
 //  The AR screen: the cube in 3-D (or in the room through the camera), with a back arrow (top
-//  left), camera and options buttons (top right), the colorbar (left) and the 3-D grid button
-//  (bottom left, like the V A R S buttons).
+//  left), camera and options buttons (top right), and at the bottom left the colorbar (same place
+//  and look as the main view's) and the 3-D grid button (like the V A R S buttons).
 //
 
 import SwiftUI
 
 struct ARModeView: View {
     @State private var model: ARModel
+    @State private var colorbarExpanded = true
     var onClose: () -> Void
 
     init(source: ARSource, onClose: @escaping () -> Void) {
@@ -94,31 +95,26 @@ struct ARModeView: View {
 
             Spacer()
 
-            // Middle left: the colorbar.
-            HStack {
+            // Bottom left: the colorbar (same place as in the main view), then the 3-D grid button;
+            // hints in the middle.
+            HStack(alignment: .bottom, spacing: 16) {
                 if model.volume != nil {
                     let r = model.range
                     ARColorbar(colormap: model.colormap, inverted: model.inverted, lo: r.lo, hi: r.hi,
                                unit: model.unitText,
+                               expanded: $colorbarExpanded,
                                onSelect: { model.colormap = $0 },
                                onToggleInverted: { model.inverted.toggle() })
                 }
-                Spacer()
-            }
-            .padding(.leading, 24)
-
-            Spacer()
-
-            // Bottom: the 3-D grid button (left) and hints (middle).
-            HStack(alignment: .bottom) {
                 gridButton
                 Spacer()
                 hint
                 Spacer()
                 Color.clear.frame(width: 70, height: 1)
             }
-            .padding(.horizontal, 40)
-            .padding(.bottom, 24)
+            .padding(.leading, 40)
+            .padding(.trailing, 24)
+            .padding(.bottom, 16)
         }
     }
 

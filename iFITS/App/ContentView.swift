@@ -102,7 +102,7 @@ struct ContentView: View {
     @State var animatorExpanded = true
     /// The small bottom-right animator, shown in every mode once the animator is collapsed.
     @State var showMiniAnimator = false
-    /// The mode to go back to when cube mode is turned off.
+    /// The V A R S mode to go back to when cube or Spectra mode is turned off.
     @State var modeBeforeCube = "V"
     /// The open file's security-scoped access stays on while it's loaded: cube planes are read
     /// from the (memory-mapped) file as they're shown.
@@ -125,10 +125,17 @@ struct ContentView: View {
     @State var showSNRExporter = false
     @State var snrExportName = ""
 
-    // AR / 3-D view of a cube, and the colorbar (bottom right)
+    // AR / 3-D view of a cube, and the colorbar (bottom left)
     /// Set by the AR button; opens the AR view.
     @State var arSource: ARSource? = nil
     @State var colorbarExpanded = true
+    /// Where the bottom dock and the V A R S buttons are (window coordinates), so the colorbar
+    /// fits between them.
+    @State var dockFrame: CGRect = .zero
+    @State var modeButtonsBottom: CGFloat = 0
+
+    // Spectra (Z mode): spectra of cubes along the spectral axis
+    @State var spectrum = SpectrumModel()
 
     struct PlaybackKey: Equatable {
         let playing: Bool
@@ -190,7 +197,8 @@ struct ContentView: View {
     /// Whether anything is docked at the bottom (for the WCS grid's label insets).
     var dockVisible: Bool {
         fitsImage != nil && (showRenderPanel || isAnnotating || selectedMode == "R" || selectedMode == "S"
-                             || (selectedMode == "C" && cubeSource != nil))
+                             || (selectedMode == "C" && cubeSource != nil)
+                             || (selectedMode == "Z" && canUseSpectra))
     }
 
     /// The small bottom-right animator is on screen.
@@ -292,6 +300,7 @@ struct ContentView: View {
             hduPickerHost
             snrExporterHost
             arHost
+            colorbarLayer
             bottomRightLayer
         }
         .onChange(of: renderSettings) { _, newSettings in
@@ -330,8 +339,12 @@ struct ContentView: View {
         // Give the image area keyboard focus at launch, whenever focus could have been lost
         // (leaving A mode, closing the header sheet), and after editing Clip min / max.
         .onAppear { restoreImageFocus() }
-        .onChange(of: selectedMode) { _, mode in
+        .onChange(of: selectedMode) { oldMode, mode in
             if mode != "A" { restoreImageFocus() }
+            // Leaving Spectra mode from the menu bar (which sets the mode directly) does the same.
+            if oldMode == "Z", mode != "Z", canUseSpectra {
+                withAnimation(.snappy) { spectrum.showBox = true }
+            }
         }
         .onChange(of: headerSheetDocument == nil) { _, closed in
             if closed { restoreImageFocus() }
@@ -343,6 +356,11 @@ struct ContentView: View {
         // whenever the region, its size or position, or the image changes.
         .task(id: statsRequest) {
             await updateStatistics()
+        }
+        // Spectra: recomputed off the main thread when the region, the Active pixel or the image
+        // changes (not when the channel changes).
+        .task(id: spectrumKey) {
+            await updateSpectrum()
         }
     }
 
@@ -530,26 +548,32 @@ struct ContentView: View {
     var modeButtons: some View {
         HStack {
             VStack(spacing: 35) {
-                ForEach(modes, id: \.self) { mode in
-                    Button(action: { selectMode(mode) }) {
-                        ZStack {
-                            if selectedMode == mode {
+                VStack(spacing: 35) {
+                    ForEach(modes, id: \.self) { mode in
+                        Button(action: { selectMode(mode) }) {
+                            ZStack {
+                                if selectedMode == mode {
+                                    Circle()
+                                        .fill(.orange.opacity(0.95))
+                                }
+
                                 Circle()
-                                    .fill(.orange.opacity(0.95))
+                                    .glassEffect(.regular, in: Circle())
+
+                                Text(mode)
+                                    .font(.largeTitle)
+                                    .foregroundColor(.primary)
                             }
-
-                            Circle()
-                                .glassEffect(.regular, in: Circle())
-
-                            Text(mode)
-                                .font(.largeTitle)
-                                .foregroundColor(.primary)
+                            .frame(width: 70, height: 70)
+                            .contentShape(Circle())
+                            .hoverEffect(.lift)
                         }
-                        .frame(width: 70, height: 70)
-                        .contentShape(Circle())
-                        .hoverEffect(.lift)
+                        .buttonStyle(.plain)
                     }
-                    .buttonStyle(.plain)
+                }
+                // The colorbar goes below these buttons.
+                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: {
+                    modeButtonsBottom = $0
                 }
                 Spacer()
             }
@@ -573,7 +597,7 @@ struct ContentView: View {
         }
     }
 
-    /// Top right: Pixel Info and the statistics box.
+    /// Top right: Pixel Info, the statistics box and the spectrum box.
     @ViewBuilder
     var topRightPanels: some View {
         // Top right, under the toolbar buttons: the pixel inspector (not in A mode)
@@ -600,6 +624,7 @@ struct ContentView: View {
                                           onClose: { withAnimation(.snappy) { showStatsBox = false } })
                                 .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
                         }
+                        spectrumBox
                     }
                 }
                 Spacer()
@@ -635,6 +660,10 @@ struct ContentView: View {
             Spacer()
             GlassEffectContainer(spacing: 24) {
                 dockPanel
+                    // Where the panel really is (the colorbar moves up when it would overlap).
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame in
+                        withAnimation(.smooth(duration: 0.3)) { dockFrame = frame }
+                    }
                     .frame(maxWidth: .infinity, alignment: isAnnotating ? .leading : .center)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
@@ -683,6 +712,8 @@ struct ContentView: View {
             AnimatorPanel(animator: animator,
                           expanded: $animatorExpanded,
                           glassNamespace: dockNamespace)
+        } else if selectedMode == "Z", canUseSpectra {
+            spectraDock
         }
     }
 
@@ -717,32 +748,68 @@ struct ContentView: View {
             }
     }
 
-    /// Bottom right, above the dock: the colorbar (whenever an image is open) and the small
-    /// animator (every mode once the animator has been collapsed, until closed with its ✕).
+    /// Bottom right, above the dock: the small animator (every mode once the animator has been
+    /// collapsed, until closed with its ✕).
     @ViewBuilder
     var bottomRightLayer: some View {
-        if fitsImage != nil {
+        if miniAnimatorVisible {
             VStack {
                 Spacer()
                 HStack {
                     Spacer()
-                    VStack(alignment: .trailing, spacing: 12) {
-                        ImageColorbar(settings: renderSettings, unit: valueUnit, expanded: $colorbarExpanded)
-                        if miniAnimatorVisible {
-                            MiniAnimatorBar(animator: animator) {
-                                withAnimation(.snappy) {
-                                    showMiniAnimator = false
-                                    animator.isPlaying = false
-                                }
-                            }
-                            .transition(.move(edge: .trailing).combined(with: .opacity))
+                    MiniAnimatorBar(animator: animator) {
+                        withAnimation(.snappy) {
+                            showMiniAnimator = false
+                            animator.isPlaying = false
                         }
                     }
                 }
             }
             .padding(.trailing, 24)
             .padding(.bottom, dockVisible ? panelHeight + 20 : 16)
+            .transition(.move(edge: .trailing).combined(with: .opacity))
         }
+    }
+
+    /// Bottom left, under the V A R S buttons: the vertical colorbar (whenever an image is open).
+    /// It sits at the bottom, or just above the dock when the dock reaches across to the left, and
+    /// gets shorter (or folds into its pill) when there isn't much room.
+    @ViewBuilder
+    var colorbarLayer: some View {
+        if fitsImage != nil {
+            GeometryReader { geo in
+                let frame = geo.frame(in: .global)
+                let space = colorbarSpace(in: frame)
+                if !space.hidden {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Spacer(minLength: 0)
+                        ImageColorbar(settings: $renderSettings,
+                                      unit: valueUnit,
+                                      barHeight: space.barHeight,
+                                      pillOnly: space.pillOnly,
+                                      expanded: $colorbarExpanded)
+                    }
+                    .padding(.leading, 40)
+                    .padding(.bottom, max(0, frame.maxY - space.bottom))
+                    .frame(width: frame.width, height: frame.height, alignment: .bottomLeading)
+                }
+            }
+        }
+    }
+
+    /// Room for the colorbar: from below the V A R S buttons down to the bottom of the window, or to
+    /// the top of the bottom dock if the dock reaches the colorbar's column.
+    func colorbarSpace(in frame: CGRect) -> (bottom: CGFloat, barHeight: CGFloat, pillOnly: Bool, hidden: Bool) {
+        var bottom = frame.maxY - 16
+        let columnRight = frame.minX + 40 + VerticalColorbar.width + 12
+        if dockVisible, dockFrame.width > 0, dockFrame.minX < columnRight {
+            bottom = min(bottom, dockFrame.minY - 16)
+        }
+        let top = (modeButtonsBottom > 0 ? modeButtonsBottom : frame.minY + 445) + 24
+        let room = bottom - top
+        // The expanded colorbar adds about 50 points (chevron and padding) to its bar.
+        let bar = min(300, room - 50)
+        return (bottom, max(80, bar), bar < 100, room < 80)
     }
 
     // MARK: - Modes
@@ -751,6 +818,8 @@ struct ContentView: View {
         withAnimation(.bouncy(duration: 0.5, extraBounce: 0.1)) {
             // Leaving cube mode while a cube is playing keeps the small animator on screen.
             if selectedMode == "C", mode != "C", animator.isPlaying { showMiniAnimator = true }
+            // Leaving Spectra mode brings up the spectrum box (top right).
+            if selectedMode == "Z", mode != "Z", canUseSpectra { spectrum.showBox = true }
             selectedMode = mode
             // Tapping S (even when S is already on) brings the statistics box back.
             if mode == "S" { showStatsBox = true }

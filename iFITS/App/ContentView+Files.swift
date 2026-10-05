@@ -289,9 +289,14 @@ extension ContentView {
                             self.animator.setIndex(index, onAxis: axis)
                         }
                     }
+                    // Spectra belong to the previous image too.
+                    self.spectrum.imageChanged()
                     if cube == nil {
                         self.showMiniAnimator = false
-                        if self.selectedMode == "C" { self.selectMode(self.modeBeforeCube) }
+                        if self.selectedMode == "C" { self.selectedMode = self.modeBeforeCube }
+                    }
+                    if self.selectedMode == "Z", cube == nil || signal == nil {
+                        self.selectedMode = self.modeBeforeCube
                     }
 
                     // HDUs, the image for SNR, and the SNR map for Pixel Info.

@@ -141,6 +141,8 @@ struct FITSMenuCommands: Commands {
         CommandMenu("Cube") {
             Button("Cube Mode") { context?.cube(.toggleMode) }
                 .keyboardShortcut("5", modifiers: .command)
+            Button("Spectra Mode") { context?.cube(.toggleSpectra) }
+                .keyboardShortcut("6", modifiers: .command)
             Divider()
             Button("Play / Pause") { context?.cube(.playPause) }
                 .keyboardShortcut("p", modifiers: [.command, .option])

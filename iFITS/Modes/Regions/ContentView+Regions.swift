@@ -80,10 +80,17 @@ extension ContentView {
             regionStore.tool = nil
             return
         }
-        // Tapping a region selects it in any mode, and switches to R.
+        // Tapping a region selects it in any mode, and switches to R. In Spectra mode it shows that
+        // region's spectrum instead (lines have no spectrum).
         if let hit = regionHit(atScreen: p) {
             regionStore.select(hit.regionID)
-            if selectedMode != "R" { selectMode("R") }
+            if selectedMode == "Z" {
+                if let region = regionStore.region(hit.regionID), region.shape.hasStatistics {
+                    spectrum.source = .region(region.id)
+                }
+            } else if selectedMode != "R" {
+                selectMode("R")
+            }
         } else if selectedMode == "R" {
             regionStore.select(nil)
         }
