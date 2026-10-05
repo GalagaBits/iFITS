@@ -11,7 +11,7 @@
 
 ---
 
-# Statement of Purpose 
+# Statement of need
 
 Many students, astronomers, and astrophysicists utilize iPads to take handwritten digital notes, read research papers, annotate papers, communicate ideas, and much more. However, to view FITS files locally, you need another device running Linux, macOS, or Windows. With the rising costs of computers, aspiring astronomers who own an iPad but not a desktop or laptop cannot access FITS files locally. iPadOS also offers a wide range of APIs and software frameworks that could benefit both aspiring astronomers and established researchers. iFITS is a developing, open-source, and free iPad app that allows users to load and open FITS images, render images with customizable visualizations, use simple yet robust cube analysis and statistics features, annotate FITS images directly using the Apple Pencil, and visualize cube data using ARKit.
 
