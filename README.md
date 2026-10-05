@@ -6,7 +6,3 @@ iFITS is an iPadOS app designed to view and render 2D and 3D FITS images using t
 ![](https://github.com/GalagaBits/iFITS/blob/main/images/Sample_Image_iFITS_Demo_extra.png)
 
 ---
-
-# Statement of need
-
-# Installation
