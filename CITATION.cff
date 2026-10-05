@@ -5,6 +5,7 @@ type: software
 authors:
   - family-names: "Deal"
     given-names: "Derod"
+    orcid: "https://orcid.org/0009-0006-6758-4751"
 version: "0.1.0"
 date-released: "2026-10-05"
 license: MIT
