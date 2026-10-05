@@ -1,0 +1,8 @@
+title: iFITS
+description: Astronomy FITS image viewer for iPadOS
+remote_theme: just-the-docs/just-the-docs
+plugins:
+  - jekyll-remote-theme
+aux_links:
+  "GitHub": "https://github.com/GalagaBits/iFITS"
+  "Zenodo DOI": "https://doi.org/10.5281/zenodo.23157674"
