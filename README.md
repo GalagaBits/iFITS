@@ -1,6 +1,4 @@
-# iFITS — Astronomy Image Visualization and Viewer for iPadOS
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23157674.svg)](https://doi.org/10.5281/zenodo.23157674)
-
+# iFITS — Astronomy Image Visualization and Viewer for iPadOS[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23157674.svg)](https://doi.org/10.5281/zenodo.23157674)
 ---
 
 
