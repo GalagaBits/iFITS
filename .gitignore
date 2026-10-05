@@ -1,2 +1,4 @@
 # Obsidian vault settings (workspace layout, plugins, themes)
 .obsidian/
+.DS_Store
+xcuserdata/
