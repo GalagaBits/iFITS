@@ -3,8 +3,8 @@ message: "If you use this software, please cite it as below."
 title: "iFITS"
 type: software
 authors:
-  - family-names: "Derod"
-    given-names: "Deal"
+  - family-names: "Deal"
+    given-names: "Derod"
 version: "0.1.0"
 date-released: "2026-10-05"
 license: MIT
