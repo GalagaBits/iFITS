@@ -2,7 +2,7 @@
 //  ContentView+Toolbar.swift
 //  iFITS Start
 //
-//  Top toolbar: file title, V A R S modes, cube button, header, grid.
+//  Top toolbar: file title, V A R S modes, cube and AR buttons, header, grid.
 //
 
 import SwiftUI
@@ -15,7 +15,7 @@ extension ContentView {
         }
 
         // Groups of three, like Pages: iOS 26 draws each group as its own glass capsule.
-        // Cube mode + two spare buttons (placeholders for later).
+        // Cube mode, AR, and a spare button (placeholder for later).
         ToolbarItemGroup(placement: .topBarTrailing) {
             Button { toggleCubeMode() } label: {
                 CubeModeIcon()
@@ -33,9 +33,10 @@ extension ContentView {
             .opacity(cubeSource == nil ? 0.4 : 1)
             .accessibilityLabel(selectedMode == "C" ? "Turn off cube mode" : "Cube mode")
 
-            Button {} label: { Image(systemName: "circle") }
-                .disabled(true)
-                .accessibilityHidden(true)
+            // AR: the cube in 3-D, or placed in the room through the camera.
+            Button { openAR() } label: { Image(systemName: "arkit") }
+                .disabled(!canOpenAR)
+                .accessibilityLabel("AR: view the cube in 3-D")
 
             Button {} label: { Image(systemName: "circle") }
                 .disabled(true)

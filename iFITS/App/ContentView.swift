@@ -125,6 +125,11 @@ struct ContentView: View {
     @State var showSNRExporter = false
     @State var snrExportName = ""
 
+    // AR / 3-D view of a cube, and the colorbar (bottom right)
+    /// Set by the AR button; opens the AR view.
+    @State var arSource: ARSource? = nil
+    @State var colorbarExpanded = true
+
     struct PlaybackKey: Equatable {
         let playing: Bool
         let framesPerSecond: Int
@@ -249,7 +254,10 @@ struct ContentView: View {
                 } message: {
                     Text(saveError ?? "")
                 }
-                .toolbarBackground(.hidden, for: .navigationBar)
+                // White title (the file name) and bar items on the black image area, in light mode too.
+                .toolbarBackground(Color.clear, for: .navigationBar)
+                .toolbarBackground(.visible, for: .navigationBar)
+                .toolbarColorScheme(.dark, for: .navigationBar)
                 .sheet(item: $headerSheetDocument) { document in
                     HeaderWindowView(document: document, onClose: { headerSheetDocument = nil })
                 }
@@ -283,7 +291,8 @@ struct ContentView: View {
             bottomDock
             hduPickerHost
             snrExporterHost
-            miniAnimatorLayer
+            arHost
+            bottomRightLayer
         }
         .onChange(of: renderSettings) { _, newSettings in
             renderer.request(newSettings)
@@ -708,27 +717,31 @@ struct ContentView: View {
             }
     }
 
-    /// The small animator, bottom right.
+    /// Bottom right, above the dock: the colorbar (whenever an image is open) and the small
+    /// animator (every mode once the animator has been collapsed, until closed with its ✕).
     @ViewBuilder
-    var miniAnimatorLayer: some View {
-        // Small animator, bottom right (above the dock), in every mode once the animator
-        // has been collapsed, until closed with its ✕.
-        if miniAnimatorVisible {
+    var bottomRightLayer: some View {
+        if fitsImage != nil {
             VStack {
                 Spacer()
                 HStack {
                     Spacer()
-                    MiniAnimatorBar(animator: animator) {
-                        withAnimation(.snappy) {
-                            showMiniAnimator = false
-                            animator.isPlaying = false
+                    VStack(alignment: .trailing, spacing: 12) {
+                        ImageColorbar(settings: renderSettings, unit: valueUnit, expanded: $colorbarExpanded)
+                        if miniAnimatorVisible {
+                            MiniAnimatorBar(animator: animator) {
+                                withAnimation(.snappy) {
+                                    showMiniAnimator = false
+                                    animator.isPlaying = false
+                                }
+                            }
+                            .transition(.move(edge: .trailing).combined(with: .opacity))
                         }
                     }
                 }
             }
             .padding(.trailing, 24)
             .padding(.bottom, dockVisible ? panelHeight + 20 : 16)
-            .transition(.move(edge: .trailing).combined(with: .opacity))
         }
     }
 
