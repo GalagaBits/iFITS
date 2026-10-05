@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "iFITS"
+type: software
+authors:
+  - family-names: "Derod"
+    given-names: "Deal"
+version: "0.1.0"
+date-released: "2026-10-05"
+license: MIT
+repository-code: "https://github.com/GalagaBits/iFITS"
+abstract: "iFITS is an iPadOS app for viewing and rendering 2D and 3D FITS images, with Apple Pencil annotations, regional statistics, and AR viewing of cubes."
+keywords:
+  - astronomy
+  - FITS
+  - iPadOS
+  - Swift
