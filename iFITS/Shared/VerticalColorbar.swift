@@ -88,8 +88,11 @@ struct VerticalColorbar: View {
                 }
             } label: {
                 bar
+                    // Menu labels are tinted with the accent colour (blue); keep the normal text colour.
+                    .foregroundStyle(Color.primary)
             }
             .menuOrder(.fixed)
+            .tint(Color.primary)
             .accessibilityLabel("Colorbar, \(colormap.title)\(inverted ? ", inverted" : ""). Tap to change the colormap.")
         }
         .padding(.top, 6)
@@ -103,6 +106,7 @@ struct VerticalColorbar: View {
         HStack(alignment: .center, spacing: 6) {
             Text(title)
                 .font(.caption.weight(.semibold))
+                .foregroundStyle(Color.primary)
                 .lineLimit(1)
                 .fixedSize()
                 .rotationEffect(.degrees(-90))
@@ -166,10 +170,11 @@ struct VerticalColorbar: View {
             ForEach(Array(shown.enumerated()), id: \.offset) { _, item in
                 HStack(spacing: 3) {
                     Rectangle()
-                        .fill(.primary)
+                        .fill(Color.primary)
                         .frame(width: 5, height: 1)
                     Text(NiceTicks.label(item.0, step: step))
                         .font(.caption2.monospacedDigit())
+                        .foregroundStyle(Color.primary)
                         .lineLimit(1)
                         .fixedSize()
                 }

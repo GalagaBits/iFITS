@@ -29,5 +29,11 @@ struct iFITS_StartApp: App {
                 HeaderWindowView(document: document)
             }
         }
+
+        // Separate window for a cube's spectra ("<file> — Spectra"), opened from the Spectra dock.
+        // It shares the main window's spectrum (see SpectraWindowLink).
+        WindowGroup("Spectra", id: "spectra", for: UUID.self) { $linkID in
+            SpectraWindowView(link: SpectraWindowLink.link(linkID))
+        }
     }
 }

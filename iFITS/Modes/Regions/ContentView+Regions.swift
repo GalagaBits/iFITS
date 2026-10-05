@@ -80,20 +80,28 @@ extension ContentView {
             regionStore.tool = nil
             return
         }
-        // Tapping a region selects it in any mode, and switches to R. In Spectra mode it shows that
-        // region's spectrum instead (lines have no spectrum).
+        // Tapping a region selects it in any mode, without changing mode (a double tap goes to R),
+        // and shows that region's spectrum (lines have no spectrum). Tapping the image away from any
+        // region goes back to the Active pixel's spectrum.
         if let hit = regionHit(atScreen: p) {
             regionStore.select(hit.regionID)
-            if selectedMode == "Z" {
-                if let region = regionStore.region(hit.regionID), region.shape.hasStatistics {
-                    spectrum.source = .region(region.id)
-                }
-            } else if selectedMode != "R" {
-                selectMode("R")
+            if let region = regionStore.region(hit.regionID), region.shape.hasStatistics {
+                spectrum.selectOnly(.region(region.id))
             }
-        } else if selectedMode == "R" {
-            regionStore.select(nil)
+        } else {
+            if selectedMode == "R" { regionStore.select(nil) }
+            spectrum.selectOnly(.active)
         }
+    }
+
+    /// A double tap on the image. On a region: selects it and switches to R mode (returns true).
+    /// Elsewhere: false, so the caller can do its own thing (inspect the pixel).
+    @discardableResult
+    func handleImageDoubleTap(atScreen p: CGPoint) -> Bool {
+        guard fitsImage != nil, let hit = regionHit(atScreen: p) else { return false }
+        regionStore.select(hit.regionID)
+        if selectedMode != "R" { selectMode("R") }
+        return true
     }
 
     /// Start of a one-finger / click drag. Returns true when the drag edits regions

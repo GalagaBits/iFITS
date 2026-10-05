@@ -136,6 +136,8 @@ nonisolated enum SpectrumArea: Equatable, Sendable {
 nonisolated struct SpectrumKey: Equatable, Sendable {
     /// ContentView.loadToken of the image.
     let token: UUID
+    /// The menu choice this spectrum is for (one line on the graph).
+    let source: SpectrumSource
     let area: SpectrumArea
     /// FITS plane number of each channel along the spectral axis (other axes, e.g. Stokes, fixed).
     let planes: [Int]
@@ -145,6 +147,8 @@ nonisolated struct SpectrumKey: Equatable, Sendable {
 
 /// Per-channel statistics of the pixels in an area. NaN where a channel has no finite pixels.
 nonisolated struct SpectrumResult: Sendable {
+    /// New for every result (the Spectra window updates when it changes).
+    let id = UUID()
     let key: SpectrumKey
     let count: [Int]
     let sum: [Double]

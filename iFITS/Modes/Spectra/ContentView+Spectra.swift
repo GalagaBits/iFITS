@@ -2,11 +2,12 @@
 //  ContentView+Spectra.swift
 //  iFITS Start
 //
-//  Spectra mode ("Z", like CARTA's Z profile): the spectrum of the Active pixel, the entire image or
-//  a region along the cube's spectral axis.
+//  Spectra mode ("Z", like CARTA's Z profile): spectra of the Active pixel, the entire image or
+//  regions along the cube's spectral axis (up to 10 overplotted).
 //
 
 import SwiftUI
+import UIKit
 
 extension ContentView {
     /// The Spectra button works for cubes (more than one channel) whose data can be read.
@@ -34,17 +35,20 @@ extension ContentView {
         }
     }
 
-    /// What the spectrum is taken over now. A deleted region falls back to the Active pixel.
-    var resolvedSpectrumSource: SpectrumSource {
-        if case .region(let id) = spectrum.source {
-            guard let region = regionStore.region(id), region.shape.hasStatistics else { return .active }
+    /// The spectra in use, in colour order. Deleted regions are dropped; never empty.
+    var resolvedSpectrumSources: [SpectrumSource] {
+        let valid = spectrum.sources.filter { source in
+            if case .region(let id) = source {
+                return regionStore.region(id)?.shape.hasStatistics == true
+            }
+            return true
         }
-        return spectrum.source
+        return valid.isEmpty ? [.active] : valid
     }
 
-    /// The pixels of the spectrum, or nil (no Active pixel yet).
-    var spectrumArea: SpectrumArea? {
-        switch resolvedSpectrumSource {
+    /// The pixels of a spectrum, or nil (no Active pixel yet, or the region is gone).
+    func spectrumArea(for source: SpectrumSource) -> SpectrumArea? {
+        switch source {
         case .active:
             guard let pixel = inspectedPixel else { return nil }
             // Pixel Info counts rows from the top; FITS y counts from the bottom.
@@ -56,16 +60,30 @@ extension ContentView {
         }
     }
 
-    /// The spectrum is on screen: the Spectra dock, or the top-right box.
-    var spectrumBoxVisible: Bool {
-        spectrum.showBox && canUseSpectra && selectedMode != "Z"
+    /// "Active (x 40, y 35)", "Entire Image", "Region 1".
+    func spectrumName(for source: SpectrumSource) -> String {
+        switch source {
+        case .active:
+            guard let pixel = inspectedPixel else { return "Active Pixel" }
+            return "Active (x \(pixel.column + 1), y \(Int(imageHeight) - pixel.row))"
+        case .entireImage:
+            return "Entire Image"
+        case .region(let id):
+            return regionStore.region(id)?.name ?? "Region"
+        }
     }
 
-    /// What to compute (nil when no spectrum is on screen). Changing channel doesn't change it; the
-    /// region, the Active pixel, or another Stokes (or other axis) channel does.
-    var spectrumKey: SpectrumKey? {
-        guard selectedMode == "Z" || spectrumBoxVisible, canUseSpectra,
-              let cube = cubeSource, let axis = spectralAxisIndex, let area = spectrumArea else { return nil }
+    /// The top-right spectrum box is on screen: not in Spectra mode (which has the dock), and not
+    /// while drawing (A mode), when it steps aside until you pick another mode.
+    var spectrumBoxVisible: Bool {
+        spectrum.showBox && canUseSpectra && selectedMode != "Z" && selectedMode != "A"
+    }
+
+    /// What to compute: one key per spectrum (none when no spectrum is on screen). Changing channel
+    /// doesn't change them; a region, the Active pixel, or another Stokes (or other axis) channel does.
+    var spectrumKeys: [SpectrumKey] {
+        guard selectedMode == "Z" || spectrumBoxVisible || spectraLink.isOpen, canUseSpectra,
+              let cube = cubeSource, let axis = spectralAxisIndex else { return [] }
         var indices = animator.indices
         if indices.count != cube.axes.count { indices = Array(repeating: 0, count: cube.axes.count) }
         let planes = (0..<cube.axes[axis].length).map { k -> Int in
@@ -73,109 +91,88 @@ extension ContentView {
             i[axis] = k
             return cube.planeIndex(i)
         }
-        return SpectrumKey(token: loadToken, area: area, planes: planes, axisIndex: axis)
+        return resolvedSpectrumSources.compactMap { source in
+            spectrumArea(for: source).map {
+                SpectrumKey(token: loadToken, source: source, area: $0, planes: planes, axisIndex: axis)
+            }
+        }
     }
 
-    /// Computes the spectrum for `spectrumKey` off the main thread (run by .task(id:), so a newer
-    /// key cancels it).
+    /// Computes the spectra for `spectrumKeys` that aren't ready yet, off the main thread, one after
+    /// another (run by .task(id:), so newer keys cancel it).
     func updateSpectrum() async {
-        guard let key = spectrumKey, let reader = signalImage else {
+        let keys = spectrumKeys
+        guard !keys.isEmpty, let reader = signalImage else {
             spectrum.isComputing = false
             return
         }
-        if spectrum.result?.key == key {
+        let missing = keys.filter { key in !spectrum.results.contains { $0.key == key } }
+        guard !missing.isEmpty else {
             spectrum.isComputing = false
             return
         }
         // Region edits arrive many times a second while dragging: wait for a pause first.
         // A single pixel (hovering) is quick, so it goes straight away.
-        let single = key.area.isSinglePixel
-        if !single {
+        let anyLarge = missing.contains { !$0.area.isSinglePixel }
+        if anyLarge {
             try? await Task.sleep(for: .milliseconds(150))
             if Task.isCancelled { return }
         }
         spectrum.isComputing = true
-        spectrum.showsProgress = !single
+        spectrum.showsProgress = anyLarge
         spectrum.progress = 0
         let model = spectrum
-        let job = Task.detached(priority: .userInitiated) {
-            SpectrumCalculator.compute(reader: reader, key: key) { fraction in
-                Task { @MainActor in model.progress = fraction }
+        let count = Double(missing.count)
+        for (i, key) in missing.enumerated() {
+            let done = Double(i)
+            let job = Task.detached(priority: .userInitiated) {
+                SpectrumCalculator.compute(reader: reader, key: key) { fraction in
+                    Task { @MainActor in model.progress = (done + fraction) / count }
+                }
             }
+            let result = await withTaskCancellationHandler {
+                await job.value
+            } onCancel: {
+                job.cancel()
+            }
+            guard !Task.isCancelled else { return }
+            if let result { spectrum.store(result) }
         }
-        let result = await withTaskCancellationHandler {
-            await job.value
-        } onCancel: {
-            job.cancel()
-        }
-        guard !Task.isCancelled else { return }
         spectrum.isComputing = false
-        if let result {
-            // A new number of channels (another file) starts zoomed out.
-            if spectrum.result?.channelCount != result.channelCount { spectrum.zoom = nil }
-            spectrum.result = result
-        }
     }
 
     /// What the spectrum views show.
     var spectrumDisplay: SpectrumDisplay? {
         guard let cube = cubeSource, let axisIndex = spectralAxisIndex else { return nil }
-        let axis = cube.axes[axisIndex]
-        let source = resolvedSpectrumSource
-        let area = spectrumArea
-        let key = spectrumKey
-
-        let name: String
-        switch source {
-        case .active:
-            if let pixel = inspectedPixel {
-                name = "Active (x \(pixel.column + 1), y \(Int(imageHeight) - pixel.row))"
-            } else {
-                name = "Active Pixel"
-            }
-        case .entireImage:
-            name = "Entire Image"
-        case .region(let id):
-            name = regionStore.region(id)?.name ?? "Region"
+        let keys = spectrumKeys
+        let sources = resolvedSpectrumSources
+        let series = sources.enumerated().map { index, source -> SpectrumSeries in
+            let area = spectrumArea(for: source)
+            // The latest result for this spectrum (an earlier one stands in while the region moves).
+            let result = keys.first { $0.source == source }.flatMap { spectrum.result(for: $0) }
+            return SpectrumSeries(source: source,
+                                  name: spectrumName(for: source),
+                                  color: SpectrumPalette.color(index),
+                                  values: result?.values(spectrum.statistic),
+                                  counts: result?.count,
+                                  isSinglePixel: area?.isSinglePixel ?? (source == .active),
+                                  resultID: result?.id)
         }
-
-        // Show the latest result only if it's for what's chosen now (kept while the next one is
-        // computed when only the region moved, so the graph doesn't blink).
-        var result = spectrum.result(for: loadToken)
-        if let r = result, let key, r.key.planes != key.planes || !sameKind(r.key.area, key.area) {
-            result = nil
-        }
-        if key == nil { result = nil }
 
         let placeholder: String?
-        if area == nil {
-            placeholder = "Hover over or double-tap a pixel to see its spectrum."
-        } else if result == nil {
-            placeholder = spectrum.isComputing ? "Reading every channel…" : nil
-        } else {
+        if series.contains(where: { $0.values != nil }) {
             placeholder = nil
+        } else if sources == [.active], inspectedPixel == nil {
+            placeholder = "Hover over or double-tap a pixel to see its spectrum."
+        } else {
+            placeholder = spectrum.isComputing ? "Reading every channel…" : nil
         }
-        let single = area?.isSinglePixel ?? (source == .active)
-        return SpectrumDisplay(axis: axis,
-                               source: source,
-                               values: result?.values(spectrum.statistic),
-                               counts: result?.count,
+        return SpectrumDisplay(axis: cube.axes[axisIndex],
+                               series: series,
                                current: animator.index(onAxis: axisIndex),
-                               sourceName: name,
-                               isSinglePixel: single,
                                statistic: spectrum.statistic,
                                unit: valueUnit,
                                placeholder: placeholder)
-    }
-
-    /// Both areas are the same kind (pixel / image / same region shape), so an earlier spectrum can
-    /// stand in until the new one is ready.
-    private func sameKind(_ a: SpectrumArea, _ b: SpectrumArea) -> Bool {
-        switch (a, b) {
-        case (.pixel, .pixel), (.entireImage, .entireImage): return true
-        case (.region(let s1, _, _, _), .region(let s2, _, _, _)): return s1 == s2
-        default: return false
-        }
     }
 
     /// The orange line was dragged (or the graph tapped): show that channel.
@@ -193,7 +190,8 @@ extension ContentView {
                              display: display,
                              regions: regionStore.statsCandidates,
                              glassNamespace: dockNamespace,
-                             onChannel: { setSpectrumChannel($0) })
+                             onChannel: { setSpectrumChannel($0) },
+                             onPopOut: { openSpectraWindow() })
         }
     }
 
@@ -208,4 +206,70 @@ extension ContentView {
                 .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
         }
     }
+
+    // MARK: - Spectra window
+
+    /// Opens the spectra in their own window (a sheet where extra windows aren't available).
+    func openSpectraWindow() {
+        pushSpectraLink()
+        if UIApplication.shared.supportsMultipleScenes {
+            openWindow(id: "spectra", value: spectraLink.id)
+        } else {
+            showSpectraSheet = true
+        }
+    }
+
+    /// What the Spectra window shows; when it changes, the window is updated. Nil (nothing to do)
+    /// while no Spectra window is open.
+    var spectraLinkKey: SpectraLinkKey? {
+        guard spectraLink.isOpen else { return nil }
+        let display = canUseSpectra ? spectrumDisplay : nil
+        return SpectraLinkKey(token: loadToken,
+                              fileName: fileName,
+                              series: display?.series.map { "\($0.name)|\($0.resultID?.uuidString ?? "-")" } ?? [],
+                              sources: display?.sources ?? [],
+                              statistic: spectrum.statistic,
+                              current: display?.current,
+                              unit: valueUnit,
+                              placeholder: display?.placeholder,
+                              regions: regionStore.statsCandidates)
+    }
+
+    /// Sends the current spectrum to the Spectra window.
+    func pushSpectraLink() {
+        let link = spectraLink
+        link.model = spectrum
+        link.fileName = fileName
+        let display = canUseSpectra ? spectrumDisplay : nil
+        link.display = display
+        link.current = display?.current
+        link.regions = regionStore.statsCandidates
+        link.onChannel = { channel in
+            link.current = channel
+            setSpectrumChannel(channel)
+        }
+    }
+
+    /// Hosts the Spectra sheet (only used where extra windows aren't available).
+    var spectraSheetHost: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .sheet(isPresented: $showSpectraSheet, onDismiss: { restoreImageFocus() }) {
+                SpectraWindowView(link: spectraLink, onClose: { showSpectraSheet = false })
+            }
+    }
+}
+
+/// Everything the Spectra window shows, so it's only updated when something changed.
+struct SpectraLinkKey: Equatable {
+    let token: UUID
+    let fileName: String
+    /// Each spectrum's name and result.
+    let series: [String]
+    let sources: [SpectrumSource]
+    let statistic: SpectrumStatistic
+    let current: Int?
+    let unit: String
+    let placeholder: String?
+    let regions: [FITSRegion]
 }

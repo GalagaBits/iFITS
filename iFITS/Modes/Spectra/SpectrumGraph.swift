@@ -3,8 +3,9 @@
 //  iFITS Start
 //
 //  The spectrum plot: value against the spectral axis (in GHz, km/s, µm, …), with an orange line
-//  on the channel shown in the image. Drag the orange line (or tap) to change channel; pinch to
-//  zoom along the spectral axis; drag elsewhere to pan when zoomed; double-tap to zoom back out.
+//  on the channel shown in the image. Drag the orange line (or tap) to change channel; pinch or move
+//  two fingers up / down to zoom along the spectral axis; two fingers left / right (or a drag away
+//  from the line) to scroll when zoomed; double-tap to zoom back out. See SpectrumGestureView.
 //
 
 import SwiftUI
@@ -42,9 +43,15 @@ enum SpectrumAxisTicks {
     }
 }
 
+/// One spectrum to draw: a value per channel (NaN = no data there) in its colour.
+struct SpectrumLine {
+    let values: [Double]
+    let color: Color
+}
+
 struct SpectrumGraph: View {
-    /// One value per channel (NaN = no data there); nil while there's nothing to show.
-    let values: [Double]?
+    /// The spectra (up to 10, overplotted); empty while there's nothing to show.
+    let lines: [SpectrumLine]
     let axis: CubeAxis
     /// "Mean (Jy/beam)".
     let yTitle: String
@@ -58,9 +65,12 @@ struct SpectrumGraph: View {
     var placeholder: String? = nil
     var onChannel: (Int) -> Void
 
+    /// Where the trackpad / mouse pointer or a hovering Apple Pencil is (nil = not over the graph).
+    @State private var hoverX: CGFloat? = nil
+
     private enum DragMode { case scrub, pan, ignore }
 
-    private struct PinchStart {
+    private struct ZoomStart {
         let range: ClosedRange<Double>
         /// Channel under the fingers, and where it is across the plot (0…1).
         let anchor: Double
@@ -70,7 +80,9 @@ struct SpectrumGraph: View {
     @State private var dragMode: DragMode? = nil
     @State private var dragStartRange: ClosedRange<Double>? = nil
     @State private var channelBeforeTouch: Int? = nil
-    @State private var pinchStart: PinchStart? = nil
+    @State private var zoomStart: ZoomStart? = nil
+    @State private var scrollStartRange: ClosedRange<Double>? = nil
+    @State private var panStartX: CGFloat? = nil
     /// The last tap, to spot a double-tap (zoom out).
     @State private var lastTap: (time: Date, x: CGFloat, channelBefore: Int)? = nil
 
@@ -90,7 +102,7 @@ struct SpectrumGraph: View {
                 Canvas { context, size in
                     draw(in: &context, size: size, plot: plot)
                 }
-                if values == nil, let placeholder {
+                if lines.isEmpty, let placeholder {
                     Text(placeholder)
                         .font(compact ? .caption : .callout)
                         .foregroundStyle(.secondary)
@@ -99,9 +111,15 @@ struct SpectrumGraph: View {
                         .position(x: plot.midX, y: plot.midY)
                 }
             }
-            .contentShape(Rectangle())
-            .gesture(dragGesture(plot))
-            .simultaneousGesture(pinchGesture(plot))
+            .overlay {
+                SpectrumGestureView(
+                    onTap: { point in tapped(at: point, plot) },
+                    onDoubleTap: { _ in doubleTapped() },
+                    onDrag: { phase, start, location in dragged(phase, start: start, location: location, plot) },
+                    onZoom: { phase, anchor, factor in zoomed(phase, anchor: anchor, factor: factor, plot) },
+                    onScroll: { phase, dx in scrolled(phase, dx: dx, plot) },
+                    onHover: { point in hoverX = point?.x })
+            }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Spectrum, \(yTitle)")
@@ -141,15 +159,17 @@ struct SpectrumGraph: View {
         return a <= b ? a...b : nil
     }
 
-    /// Value range of the visible channels, with a little room above and below.
-    private func valueRange(_ values: [Double]) -> (lo: Double, hi: Double)? {
-        guard let channels = visibleChannels else { return nil }
+    /// Value range of the visible channels of every line, with a little room above and below.
+    private func valueRange(_ lines: [SpectrumLine]) -> (lo: Double, hi: Double)? {
+        guard let channels = visibleChannels, !lines.isEmpty else { return nil }
         var lo = Double.infinity, hi = -Double.infinity
-        for k in channels where k < values.count {
-            let v = values[k]
-            guard v.isFinite else { continue }
-            if v < lo { lo = v }
-            if v > hi { hi = v }
+        for line in lines {
+            for k in channels where k < line.values.count {
+                let v = line.values[k]
+                guard v.isFinite else { continue }
+                if v < lo { lo = v }
+                if v > hi { hi = v }
+            }
         }
         guard lo <= hi else { return nil }
         if hi == lo {
@@ -165,7 +185,7 @@ struct SpectrumGraph: View {
     private func draw(in context: inout GraphicsContext, size: CGSize, plot: CGRect) {
         let tickFont: Font = compact ? .system(size: 9).monospacedDigit() : .caption2.monospacedDigit()
         let gridColor = Color.primary.opacity(0.09)
-        let range = values.flatMap { valueRange($0) }
+        let range = valueRange(lines)
 
         // Spectral axis ticks and grid.
         let xTicks = SpectrumAxisTicks.make(axis: axis, lower: visible.lowerBound, upper: visible.upperBound,
@@ -214,18 +234,21 @@ struct SpectrumGraph: View {
             rotated.draw(Text(yTitle).font(.caption.weight(.semibold)), at: .zero, anchor: .center)
         }
 
-        // The spectrum, clipped to the plot.
-        if let values, let range, let channels = visibleChannels {
+        // The spectra, clipped to the plot (first line on top).
+        if let range, let channels = visibleChannels {
             var plotLayer = context
             plotLayer.clip(to: Path(plot))
             func y(_ v: Double) -> CGFloat {
                 plot.maxY - CGFloat((v - range.lo) / (range.hi - range.lo)) * plot.height
             }
-            // One channel either side, so the line runs to the edges when zoomed.
-            let a = max(0, channels.lowerBound - 1), b = min(values.count - 1, channels.upperBound + 1)
-            var path = Path()
-            var penDown = false
-            if a <= b {
+            let spacing = plot.width / CGFloat(max(1e-9, visible.upperBound - visible.lowerBound))
+            for line in lines.reversed() {
+                let values = line.values
+                // One channel either side, so the line runs to the edges when zoomed.
+                let a = max(0, channels.lowerBound - 1), b = min(values.count - 1, channels.upperBound + 1)
+                guard a <= b else { continue }
+                var path = Path()
+                var penDown = false
                 for k in a...b {
                     let v = values[k]
                     guard v.isFinite else { penDown = false; continue }
@@ -233,20 +256,28 @@ struct SpectrumGraph: View {
                     if penDown { path.addLine(to: p) } else { path.move(to: p) }
                     penDown = true
                 }
-            }
-            plotLayer.stroke(path, with: .color(.primary), style: StrokeStyle(lineWidth: compact ? 1.2 : 1.5, lineJoin: .round))
-
-            // Dots once the channels are far apart.
-            let spacing = plot.width / CGFloat(max(1e-9, visible.upperBound - visible.lowerBound))
-            if spacing >= 10, a <= b {
-                for k in a...b where values[k].isFinite {
-                    let p = CGPoint(x: xPosition(Double(k), plot), y: y(values[k]))
-                    plotLayer.fill(Path(ellipseIn: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)), with: .color(.primary))
+                plotLayer.stroke(path, with: .color(line.color),
+                                 style: StrokeStyle(lineWidth: compact ? 1.2 : 1.5, lineJoin: .round))
+                // Dots once the channels are far apart.
+                if spacing >= 10 {
+                    for k in a...b where values[k].isFinite {
+                        let p = CGPoint(x: xPosition(Double(k), plot), y: y(values[k]))
+                        plotLayer.fill(Path(ellipseIn: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)),
+                                       with: .color(line.color))
+                    }
                 }
             }
         }
 
-        // The current channel: an orange line with a handle, and a dot on the spectrum.
+        // The pointer / Pencil hover position: a faint gray line, only while hovering over the plot.
+        if let hx = hoverX, hx >= plot.minX, hx <= plot.maxX {
+            var line = Path()
+            line.move(to: CGPoint(x: hx, y: plot.minY))
+            line.addLine(to: CGPoint(x: hx, y: plot.maxY))
+            context.stroke(line, with: .color(.gray.opacity(0.55)), lineWidth: 1)
+        }
+
+        // The current channel: an orange line with a handle, and a dot on each spectrum.
         let cx = xPosition(Double(current), plot)
         if cx >= plot.minX - 0.5, cx <= plot.maxX + 0.5 {
             var line = Path()
@@ -255,97 +286,122 @@ struct SpectrumGraph: View {
             context.stroke(line, with: .color(.orange), lineWidth: 2)
             let handle = CGRect(x: cx - 5, y: plot.minY - (compact ? 3 : 5), width: 10, height: compact ? 8 : 12)
             context.fill(Path(roundedRect: handle, cornerRadius: 3), with: .color(.orange))
-            if let values, let range, values.indices.contains(current), values[current].isFinite {
-                let cy = plot.maxY - CGFloat((values[current] - range.lo) / (range.hi - range.lo)) * plot.height
-                let dot = CGRect(x: cx - 4, y: cy - 4, width: 8, height: 8)
-                context.fill(Path(ellipseIn: dot), with: .color(.orange))
-                context.stroke(Path(ellipseIn: dot), with: .color(.white), lineWidth: 1.2)
+            if let range {
+                for spectrum in lines where spectrum.values.indices.contains(current) && spectrum.values[current].isFinite {
+                    let cy = plot.maxY - CGFloat((spectrum.values[current] - range.lo) / (range.hi - range.lo)) * plot.height
+                    let dot = CGRect(x: cx - 4, y: cy - 4, width: 8, height: 8)
+                    context.fill(Path(ellipseIn: dot), with: .color(spectrum.color))
+                    context.stroke(Path(ellipseIn: dot), with: .color(.white), lineWidth: 1.2)
+                }
             }
         }
     }
 
-    // MARK: Gestures
+    // MARK: Gestures (see SpectrumGestureView)
 
-    /// Drag the orange line (or anywhere, when not zoomed) to change channel; drag elsewhere to pan
-    /// when zoomed. A tap moves the line there.
-    private func dragGesture(_ plot: CGRect) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if dragMode == nil {
-                    channelBeforeTouch = current
-                    dragStartRange = visible
-                    let nearLine = abs(value.startLocation.x - xPosition(Double(current), plot)) < (compact ? 16 : 24)
-                    dragMode = (zoom == nil || nearLine) ? .scrub : .pan
-                }
-                switch dragMode ?? .ignore {
-                case .scrub:
-                    let c = channel(atX: value.location.x, plot)
-                    if c != current { onChannel(c) }
-                case .pan:
-                    guard let start = dragStartRange else { return }
-                    let span = start.upperBound - start.lowerBound
-                    let shift = -Double(value.translation.width / plot.width) * span
-                    let full = fullRange
-                    let lower = min(max(start.lowerBound + shift, full.lowerBound), full.upperBound - span)
-                    zoom = lower...(lower + span)
-                case .ignore:
-                    break
-                }
-            }
-            .onEnded { value in
-                let isTap = dragMode != .ignore && hypot(value.translation.width, value.translation.height) < 4
-                if isTap {
-                    let now = Date()
-                    if let last = lastTap, now.timeIntervalSince(last.time) < 0.35, abs(last.x - value.location.x) < 30 {
-                        // Double-tap: zoom back out, with the line where it was before the taps.
-                        zoom = nil
-                        if last.channelBefore != current { onChannel(last.channelBefore) }
-                        lastTap = nil
-                    } else {
-                        lastTap = (now, value.location.x, channelBeforeTouch ?? current)
-                        // A tap while zoomed (away from the line): move the line there.
-                        if dragMode == .pan { onChannel(channel(atX: value.location.x, plot)) }
-                    }
-                } else {
-                    lastTap = nil
-                }
-                dragMode = nil
-                dragStartRange = nil
-                channelBeforeTouch = nil
-            }
+    /// A tap moves the line there.
+    private func tapped(at point: CGPoint, _ plot: CGRect) {
+        // Remember where the line was before the first tap of a possible double tap.
+        let now = Date()
+        if lastTap == nil || now.timeIntervalSince(lastTap!.time) > 0.5 {
+            lastTap = (now, point.x, current)
+        }
+        onChannel(channel(atX: point.x, plot))
     }
 
-    /// Pinch (or trackpad pinch) to zoom along the spectral axis, around the fingers.
-    private func pinchGesture(_ plot: CGRect) -> some Gesture {
-        MagnifyGesture(minimumScaleDelta: 0.01)
-            .onChanged { value in
-                if pinchStart == nil {
-                    // The first finger's touch already moved the line: put it back.
-                    if dragMode != nil {
-                        if dragMode == .scrub, let c = channelBeforeTouch, c != current { onChannel(c) }
-                        if let start = dragStartRange, dragMode == .pan { zoom = start == fullRange ? nil : start }
-                        dragMode = .ignore
-                    }
-                    let v = visible
-                    let fraction = Double(min(max((value.startLocation.x - plot.minX) / plot.width, 0), 1))
-                    pinchStart = PinchStart(range: v, anchor: v.lowerBound + fraction * (v.upperBound - v.lowerBound),
-                                            fraction: fraction)
-                }
-                guard let start = pinchStart else { return }
-                let full = fullRange
-                let fullSpan = full.upperBound - full.lowerBound
-                let minSpan = min(fullSpan, 4)
-                let startSpan = start.range.upperBound - start.range.lowerBound
-                let span = min(max(startSpan / max(Double(value.magnification), 0.01), minSpan), fullSpan)
-                if span >= fullSpan - 1e-9 {
-                    zoom = nil
-                    return
-                }
-                let lower = min(max(start.anchor - start.fraction * span, full.lowerBound), full.upperBound - span)
-                zoom = lower...(lower + span)
+    /// A double tap zooms back out, with the line where it was before the taps.
+    private func doubleTapped() {
+        zoom = nil
+        if let last = lastTap, Date().timeIntervalSince(last.time) < 0.8, last.channelBefore != current {
+            onChannel(last.channelBefore)
+        }
+        lastTap = nil
+    }
+
+    /// One finger / click-drag: drags the orange line (anywhere when not zoomed), or pans when
+    /// zoomed and started away from the line.
+    private func dragged(_ phase: SpectrumGesturePhase, start: CGPoint, location: CGPoint, _ plot: CGRect) {
+        switch phase {
+        case .began:
+            channelBeforeTouch = current
+            dragStartRange = visible
+            let nearLine = abs(start.x - xPosition(Double(current), plot)) < (compact ? 16 : 24)
+            dragMode = (zoom == nil || nearLine) ? .scrub : .pan
+            fallthrough
+        case .changed:
+            switch dragMode ?? .ignore {
+            case .scrub:
+                let c = channel(atX: location.x, plot)
+                if c != current { onChannel(c) }
+            case .pan:
+                guard let s = dragStartRange else { return }
+                if phase == .began { panStartX = start.x }
+                guard let x0 = panStartX else { return }
+                pan(from: s, by: -Double((location.x - x0) / plot.width) * (s.upperBound - s.lowerBound))
+            case .ignore:
+                break
             }
-            .onEnded { _ in
-                pinchStart = nil
+        case .ended:
+            dragMode = nil
+            dragStartRange = nil
+            channelBeforeTouch = nil
+            panStartX = nil
+        case .cancelled:
+            // A second finger came down (pinch / two-finger zoom): undo the drag.
+            if dragMode == .scrub, let c = channelBeforeTouch, c != current { onChannel(c) }
+            if dragMode == .pan, let s = dragStartRange { zoom = s == fullRange ? nil : s }
+            dragMode = nil
+            dragStartRange = nil
+            channelBeforeTouch = nil
+            panStartX = nil
+        }
+    }
+
+    /// Pinch, or two fingers up / down: zoom along the spectral axis around where it started.
+    private func zoomed(_ phase: SpectrumGesturePhase, anchor: CGPoint, factor: Double, _ plot: CGRect) {
+        switch phase {
+        case .began:
+            let v = visible
+            let fraction = Double(min(max((anchor.x - plot.minX) / plot.width, 0), 1))
+            zoomStart = ZoomStart(range: v, anchor: v.lowerBound + fraction * (v.upperBound - v.lowerBound),
+                                  fraction: fraction)
+        case .changed:
+            guard let start = zoomStart else { return }
+            let full = fullRange
+            let fullSpan = full.upperBound - full.lowerBound
+            let minSpan = min(fullSpan, 4)
+            let startSpan = start.range.upperBound - start.range.lowerBound
+            let span = min(max(startSpan / max(factor, 0.01), minSpan), fullSpan)
+            if span >= fullSpan - 1e-9 {
+                zoom = nil
+                return
             }
+            let lower = min(max(start.anchor - start.fraction * span, full.lowerBound), full.upperBound - span)
+            zoom = lower...(lower + span)
+        case .ended, .cancelled:
+            zoomStart = nil
+        }
+    }
+
+    /// Two fingers left / right (or trackpad scroll): scroll along the spectrum when zoomed.
+    private func scrolled(_ phase: SpectrumGesturePhase, dx: CGFloat, _ plot: CGRect) {
+        switch phase {
+        case .began:
+            scrollStartRange = zoom
+        case .changed:
+            guard let s = scrollStartRange else { return }
+            pan(from: s, by: -Double(dx / plot.width) * (s.upperBound - s.lowerBound))
+        case .ended, .cancelled:
+            scrollStartRange = nil
+        }
+    }
+
+    /// Shows `range` moved by `shift` channels, kept inside the spectrum.
+    private func pan(from range: ClosedRange<Double>, by shift: Double) {
+        let span = range.upperBound - range.lowerBound
+        let full = fullRange
+        guard span < full.upperBound - full.lowerBound - 1e-9 else { return }
+        let lower = min(max(range.lowerBound + shift, full.lowerBound), full.upperBound - span)
+        zoom = lower...(lower + span)
     }
 }

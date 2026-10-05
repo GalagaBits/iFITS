@@ -66,6 +66,8 @@ struct ContentView: View {
     // Pixel inspector (V / R / S modes): the pixel last hovered (trackpad / Pencil)
     // or double-tapped. Stays put when you switch input devices.
     @State var inspectedPixel: InspectedPixel? = nil
+    /// Pixel Info shows the full table (true) or just the pixel and its value.
+    @State var pixelInfoExpanded = true
 
     /// Double-tap only inspects once individual pixels are at least this big on screen (points).
     let minPixelSizeForTapInspect: CGFloat = 8
@@ -136,6 +138,10 @@ struct ContentView: View {
 
     // Spectra (Z mode): spectra of cubes along the spectral axis
     @State var spectrum = SpectrumModel()
+    /// Connects this window to its Spectra window (pop-out button in the Spectra dock).
+    @State var spectraLink = SpectraWindowLink()
+    /// The Spectra "window" as a sheet, where extra windows aren't available.
+    @State var showSpectraSheet = false
 
     struct PlaybackKey: Equatable {
         let playing: Bool
@@ -300,6 +306,7 @@ struct ContentView: View {
             hduPickerHost
             snrExporterHost
             arHost
+            spectraSheetHost
             colorbarLayer
             bottomRightLayer
         }
@@ -359,8 +366,20 @@ struct ContentView: View {
         }
         // Spectra: recomputed off the main thread when the region, the Active pixel or the image
         // changes (not when the channel changes).
-        .task(id: spectrumKey) {
+        .task(id: spectrumKeys) {
             await updateSpectrum()
+        }
+        // Deleted regions leave the spectra (and free their colour).
+        .onChange(of: regionStore.statsCandidates.map(\.id)) { _, ids in
+            spectrum.keepOnly(regions: Set(ids))
+        }
+        // The Spectra window (if open) follows this window's spectrum.
+        .onAppear {
+            spectraLink.model = spectrum
+            SpectraWindowLink.register(spectraLink)
+        }
+        .onChange(of: spectraLinkKey) { _, key in
+            if key != nil { pushSpectraLink() }
         }
     }
 
@@ -479,6 +498,8 @@ struct ContentView: View {
                     inspect(atScreen: point, in: size, source: source)
                 },
                 onDoubleTap: { point in
+                    // On a region: go to R mode with it selected.
+                    if handleImageDoubleTap(atScreen: point) { return }
                     // Touch: only once individual pixels are visible.
                     guard pointsPerImagePixel(in: size) >= minPixelSizeForTapInspect else { return }
                     inspect(atScreen: point, in: size, source: .touch)
@@ -529,8 +550,10 @@ struct ContentView: View {
                                  onTransform: { translation, scaleFactor, anchor in
                                      applyTransform(translation: translation, scaleFactor: scaleFactor, anchor: anchor)
                                  },
-                                 // A finger / pointer tap (not the Pencil) on a region selects it.
-                                 onTap: { point in handleImageTap(atScreen: point) })
+                                 // A finger / pointer tap (not the Pencil) on a region selects it;
+                                 // a double tap also switches to R mode.
+                                 onTap: { point in handleImageTap(atScreen: point) },
+                                 onDoubleTap: { point in handleImageDoubleTap(atScreen: point) })
                 .allowsHitTesting(isAnnotating)
             }
         }
@@ -614,10 +637,13 @@ struct ContentView: View {
                                            header: headerDict,
                                            imageHeight: Int(imageHeight),
                                            channel: cubeSource == nil ? 0 : animator.index(onAxis: 0),
-                                           snr: snrValue(at: pixel))
+                                           snr: snrValue(at: pixel),
+                                           expanded: $pixelInfoExpanded)
                                 .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
                         }
-                        if showStatsBox {
+                        // The statistics and spectrum boxes step aside while drawing (A mode)
+                        // and come back afterwards.
+                        if showStatsBox, selectedMode != "A" {
                             StatisticsBox(regionName: regionStore.statsRegion?.name ?? "Entire Image",
                                           stats: regionStats,
                                           unit: valueUnit,
@@ -776,7 +802,8 @@ struct ContentView: View {
     /// gets shorter (or folds into its pill) when there isn't much room.
     @ViewBuilder
     var colorbarLayer: some View {
-        if fitsImage != nil {
+        // Steps aside while drawing (A mode), like the statistics and spectrum boxes.
+        if fitsImage != nil, selectedMode != "A" {
             GeometryReader { geo in
                 let frame = geo.frame(in: .global)
                 let space = colorbarSpace(in: frame)

@@ -59,6 +59,10 @@ struct PixelInfoPanel: View {
     var channel = 0
     /// Signal-to-noise ratio at this pixel, once an SNR file (made in S mode) is open.
     var snr: Float? = nil
+    /// Full table, or just "(x, y) pix" and the value (the chevron switches).
+    @Binding var expanded: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private struct Row {
         let label: String
@@ -74,20 +78,32 @@ struct PixelInfoPanel: View {
                     .foregroundStyle(.secondary)
                 Text("Pixel Info")
                     .font(.subheadline.weight(.semibold))
+                Spacer(minLength: 12)
+                Button {
+                    withAnimation(DockAnimation.stage(reduceMotion)) { expanded.toggle() }
+                } label: {
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(.quaternary, in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .hoverEffect(.highlight)
+                .accessibilityLabel(expanded ? "Collapse Pixel Info" : "Expand Pixel Info")
             }
 
-            Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    GridRow {
-                        Text(row.label)
-                            .foregroundStyle(.secondary)
-                        Text(row.value)
-                            .foregroundStyle(row.secondary ? .secondary : .primary)
-                            .gridColumnAlignment(.trailing)
-                        Text(row.unit)
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.system(row.secondary ? .caption : .callout, design: .monospaced))
+            if expanded {
+                table
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    compactRow
+                    // Keeps the box exactly as wide as when it's expanded.
+                    table
+                        .hidden()
+                        .frame(height: 0)
+                        .accessibilityHidden(true)
                 }
             }
         }
@@ -95,7 +111,42 @@ struct PixelInfoPanel: View {
         // Size to the content only, so the box stays compact in the top-right corner.
         .fixedSize()
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .allowsHitTesting(false)
+    }
+
+    /// Collapsed: "(40, 35) pix" and "1555.21 MJy/sr", units smaller and gray.
+    private var compactRow: some View {
+        let fx = pixel.column + 1, fy = imageHeight - pixel.row
+        let unit = text("BUNIT")
+        return HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("(\(fx), \(fy))\(small(" pix"))")
+            Spacer(minLength: 12)
+            Text("\(valueText)\(small(unit.isEmpty ? "" : " " + unit))")
+        }
+        .font(.system(.callout, design: .monospaced))
+        .lineLimit(1)
+    }
+
+    /// A unit in the collapsed row: smaller and gray.
+    private func small(_ s: String) -> Text {
+        Text(s).font(.system(.caption, design: .monospaced)).foregroundStyle(.secondary)
+    }
+
+    /// The full table: pixel, world coordinates, channel, value (and SNR).
+    private var table: some View {
+        Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 3) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    Text(row.label)
+                        .foregroundStyle(.secondary)
+                    Text(row.value)
+                        .foregroundStyle(row.secondary ? .secondary : .primary)
+                        .gridColumnAlignment(.trailing)
+                    Text(row.unit)
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(row.secondary ? .caption : .callout, design: .monospaced))
+            }
+        }
     }
 
     // MARK: Content

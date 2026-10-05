@@ -18,10 +18,12 @@ struct AnnotationCanvas: UIViewRepresentable {
     var onTransform: (CGSize, CGFloat, CGPoint) -> Void
     /// A finger / pointer tap (never the Pencil).
     var onTap: ((CGPoint) -> Void)? = nil
+    /// A finger / pointer double tap (never the Pencil).
+    var onDoubleTap: ((CGPoint) -> Void)? = nil
 
     func makeCoordinator() -> ZoomPanController {
         // Fingers / trackpad move and zoom the image; the Pencil draws.
-        ZoomPanController(ignorePencil: true)
+        ZoomPanController(ignorePencil: true, doubleTaps: true)
     }
 
     func makeUIView(context: Context) -> CaptureCanvasView {
@@ -33,6 +35,7 @@ struct AnnotationCanvas: UIViewRepresentable {
     func updateUIView(_ canvas: CaptureCanvasView, context: Context) {
         context.coordinator.onTransform = onTransform
         context.coordinator.onTap = onTap
+        context.coordinator.onDoubleTap = onDoubleTap
         context.coordinator.dragEnabled = !fingerDrawing
         model.screenToImage = screenToImage
         model.setActive(isActive)

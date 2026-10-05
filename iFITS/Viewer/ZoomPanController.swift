@@ -73,6 +73,7 @@ final class ZoomPanController: NSObject, UIGestureRecognizerDelegate, UIPointerI
         didSet {
             drag?.isEnabled = dragEnabled
             tap?.isEnabled = dragEnabled
+            doubleTap?.isEnabled = dragEnabled
         }
     }
 
@@ -83,6 +84,9 @@ final class ZoomPanController: NSObject, UIGestureRecognizerDelegate, UIPointerI
 
     private let ignorePencil: Bool
     private let inspection: Bool
+    /// Double taps are reported (always on with `inspection`).
+    private let doubleTaps: Bool
+    private weak var doubleTap: UITapGestureRecognizer?
     private var installed: [UIGestureRecognizer] = []
     private weak var drag: UIPanGestureRecognizer?
     private weak var tap: UITapGestureRecognizer?
@@ -95,9 +99,10 @@ final class ZoomPanController: NSObject, UIGestureRecognizerDelegate, UIPointerI
     private var lastPinchScale: CGFloat = 1
     private var pinchIsFromTrackpad = false
 
-    init(ignorePencil: Bool = false, inspection: Bool = false) {
+    init(ignorePencil: Bool = false, inspection: Bool = false, doubleTaps: Bool = false) {
         self.ignorePencil = ignorePencil
         self.inspection = inspection
+        self.doubleTaps = doubleTaps || inspection
         super.init()
     }
 
@@ -135,13 +140,21 @@ final class ZoomPanController: NSObject, UIGestureRecognizerDelegate, UIPointerI
         if inspection {
             // Pointer and Apple Pencil hover (iPadOS reports both through this recognizer).
             recognizers.append(UIHoverGestureRecognizer(target: self, action: #selector(handleHover(_:))))
-            let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
-            doubleTap.numberOfTapsRequired = 2
-            recognizers.append(doubleTap)
             // The pointer changes shape over regions (see RegionPointer).
             let pointer = UIPointerInteraction(delegate: self)
             view.addInteraction(pointer)
             pointerShapes = pointer
+        }
+        if doubleTaps {
+            let doubleTap = UITapGestureRecognizer(target: self, action: #selector(handleDoubleTap(_:)))
+            doubleTap.numberOfTapsRequired = 2
+            if ignorePencil {
+                doubleTap.allowedTouchTypes = [NSNumber(value: UITouch.TouchType.direct.rawValue),
+                                               NSNumber(value: UITouch.TouchType.indirectPointer.rawValue)]
+            }
+            doubleTap.isEnabled = dragEnabled
+            recognizers.append(doubleTap)
+            self.doubleTap = doubleTap
         }
         for g in recognizers {
             g.delegate = self
