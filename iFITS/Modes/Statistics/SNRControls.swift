@@ -20,6 +20,8 @@ struct SNRControls: View {
     var onOpenNoiseFile: () -> Void
     var onCalculate: () -> Void
 
+    @Environment(\.compactLayout) private var compact
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let productInfo {
@@ -38,11 +40,14 @@ struct SNRControls: View {
                     GridRow {
                         Text("Noise value")
                             .foregroundStyle(.secondary)
-                        HStack(spacing: 8) {
-                            NumberField(value: model.manualSigma) { model.manualSigma = $0 }
-                                .frame(width: 150)
-                            Text(unit.isEmpty ? "(no BUNIT)" : unit)
-                                .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                NumberField(value: model.manualSigma) { model.manualSigma = $0 }
+                                    .frame(minWidth: 90, maxWidth: 150)
+                                Text(unit.isEmpty ? "(no BUNIT)" : unit)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                             Text("for every pixel and channel")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -60,7 +65,7 @@ struct SNRControls: View {
                         .foregroundStyle(.secondary)
                     HStack(spacing: 8) {
                         NumberField(value: model.cutoff) { model.cutoff = $0 }
-                            .frame(width: 150)
+                            .frame(minWidth: 90, maxWidth: 150)
                         Text("σ")
                             .foregroundStyle(.secondary)
                     }
@@ -68,27 +73,16 @@ struct SNRControls: View {
             }
             .font(.callout)
 
-            HStack(spacing: 12) {
-                Button(action: onOpenNoiseFile) {
-                    Label("Open Noise File…", systemImage: "folder")
+            // Side by side when there's room; one above the other in a narrow window.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    openNoiseButton
+                    Spacer(minLength: 0)
+                    calculateControls
                 }
-                .buttonStyle(.bordered)
-                .disabled(model.isCalculating)
-
-                Spacer(minLength: 0)
-
-                if model.isCalculating {
-                    ProgressView(value: model.progress)
-                        .frame(width: 160)
-                    Text("Calculating…")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Button(action: onCalculate) {
-                        Label("Calculate SNR", systemImage: "waveform.path.ecg")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canCalculate)
+                VStack(alignment: .leading, spacing: 10) {
+                    openNoiseButton
+                    calculateControls
                 }
             }
 
@@ -104,6 +98,33 @@ struct SNRControls: View {
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var openNoiseButton: some View {
+        Button(action: onOpenNoiseFile) {
+            Label("Open Noise File…", systemImage: "folder")
+        }
+        .buttonStyle(.bordered)
+        .disabled(model.isCalculating)
+    }
+
+    @ViewBuilder
+    private var calculateControls: some View {
+        if model.isCalculating {
+            HStack(spacing: 12) {
+                ProgressView(value: model.progress)
+                    .frame(width: 160)
+                Text("Calculating…")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        } else {
+            Button(action: onCalculate) {
+                Label("Calculate SNR", systemImage: "waveform.path.ecg")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canCalculate)
         }
     }
 
@@ -142,7 +163,7 @@ struct SNRControls: View {
                 Label("Open Noise File…", systemImage: "folder")
             }
         } label: {
-            DockMenuLabel(text: currentLabel)
+            DockMenuLabel(text: currentLabel, minWidth: compact ? 120 : 160)
         }
         .menuOrder(.fixed)
         .disabled(model.isCalculating)

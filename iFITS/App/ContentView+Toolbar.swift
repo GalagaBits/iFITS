@@ -3,6 +3,8 @@
 //  iFITS Start
 //
 //  Top toolbar: file title, V A R S modes, cube, AR and Spectra buttons, header, grid.
+//  In a narrow window (see WindowLayout) the buttons fold into one » menu, like Pages, which also
+//  holds the V A R S modes once their buttons on the left are gone.
 //
 
 import SwiftUI
@@ -11,9 +13,28 @@ extension ContentView {
     @ToolbarContentBuilder
     var astroToolBar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            Button("Open File") { openFITSPicker() }
+            if windowLayout.foldsToolbar {
+                // A folder icon leaves more room for the file name.
+                Button { openFITSPicker() } label: { Image(systemName: "folder") }
+                    .accessibilityLabel("Open File")
+            } else {
+                Button("Open File") { openFITSPicker() }
+            }
         }
 
+        if windowLayout.foldsToolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                foldedToolbarMenu
+            }
+        } else {
+            fullToolbarItems
+        }
+    }
+
+    // MARK: Wide window
+
+    @ToolbarContentBuilder
+    var fullToolbarItems: some ToolbarContent {
         // Groups of three, like Pages: iOS 26 draws each group as its own glass capsule.
         // Cube mode, AR, and Spectra mode.
         ToolbarItemGroup(placement: .topBarTrailing) {
@@ -89,35 +110,119 @@ extension ContentView {
                 .accessibilityLabel("Share")
 
             Menu {
-                // Save = annotations and regions into the loaded FITS file.
-                Group {
-                    Button { saveToOriginal() } label: {
-                        Label("Save", systemImage: "square.and.arrow.down")
-                    }
-                    Button { saveCopy() } label: {
-                        Label("Save as Copy…", systemImage: "doc.on.doc")
-                    }
-                    Button { exportImage() } label: {
-                        Label("Export and Send…", systemImage: "photo.badge.arrow.down")
-                    }
-                    Divider()
-                    Button { importRegions() } label: {
-                        Label("Import Regions (.reg)…", systemImage: "square.and.arrow.down.on.square")
-                    }
-                    Button { exportRegions() } label: {
-                        Label("Export Regions (.reg)…", systemImage: "square.and.arrow.up.on.square")
-                    }
-                    .disabled(regionStore.regions.isEmpty)
-                }
-                .disabled(loadedFileURL == nil)
+                fileMenuItems
                 Divider()
-                Button { showSettings = true } label: {
-                    Label("Settings", systemImage: "gearshape")
-                }
+                settingsButton
             } label: {
                 Image(systemName: "ellipsis")
             }
             .accessibilityLabel("More")
+        }
+    }
+
+    // MARK: Narrow window
+
+    /// Everything from the toolbar (and, in a small window, the V A R S buttons) in one menu, each
+    /// item with its icon and name.
+    var foldedToolbarMenu: some View {
+        Menu {
+            Section("Mode") {
+                modeToggle("Visualization", systemImage: "v.circle", mode: "V")
+                modeToggle("Annotation", systemImage: "a.circle", mode: "A")
+                modeToggle("Regions", systemImage: "r.circle", mode: "R")
+                modeToggle("Statistics", systemImage: "s.circle", mode: "S")
+                Toggle(isOn: Binding(get: { selectedMode == "C" }, set: { _ in toggleCubeMode() })) {
+                    Label("Cube", systemImage: "square.stack.3d.up")
+                }
+                .disabled(cubeSource == nil)
+                Toggle(isOn: Binding(get: { selectedMode == "Z" }, set: { _ in toggleSpectraMode() })) {
+                    Label("Spectra", systemImage: "chart.xyaxis.line")
+                }
+                .disabled(!canUseSpectra)
+            }
+
+            Section {
+                Button { openAR() } label: {
+                    Label("3-D and AR View", systemImage: "arkit")
+                }
+                .disabled(!canOpenAR)
+                Button { showHeader() } label: {
+                    Label("FITS Header", systemImage: "list.bullet.rectangle")
+                }
+                .disabled(headerCards.isEmpty)
+                Toggle(isOn: $showGrid) {
+                    Label("Grid", systemImage: "grid")
+                }
+                Button { resetView() } label: {
+                    Label("Reset View", systemImage: "arrow.counterclockwise")
+                }
+            }
+
+            Section {
+                Button { undoLastEdit() } label: {
+                    Label(edits.undoTitle, systemImage: "arrow.uturn.backward")
+                }
+                .disabled(!edits.canUndo)
+                Button { redoLastEdit() } label: {
+                    Label(edits.redoTitle, systemImage: "arrow.uturn.forward")
+                }
+                .disabled(!edits.canRedo)
+            }
+
+            Section {
+                Button { shareFITS() } label: {
+                    Label("Share…", systemImage: "square.and.arrow.up")
+                }
+                .disabled(loadedFileURL == nil)
+                fileMenuItems
+            }
+
+            settingsButton
+        } label: {
+            Image(systemName: "chevron.forward.2")
+        }
+        .menuOrder(.fixed)
+        .accessibilityLabel("More")
+    }
+
+    /// A V A R S mode in the » menu (ticked while it's on).
+    func modeToggle(_ title: String, systemImage: String, mode: String) -> some View {
+        Toggle(isOn: Binding(get: { selectedMode == mode }, set: { _ in selectMode(mode) })) {
+            Label(title, systemImage: systemImage)
+        }
+    }
+
+    // MARK: Shared items
+
+    /// Save, Save as Copy, Export and Send, and the region files.
+    @ViewBuilder
+    var fileMenuItems: some View {
+        // Save = annotations and regions into the loaded FITS file.
+        Group {
+            Button { saveToOriginal() } label: {
+                Label("Save", systemImage: "square.and.arrow.down")
+            }
+            Button { saveCopy() } label: {
+                Label("Save as Copy…", systemImage: "doc.on.doc")
+            }
+            Button { exportImage() } label: {
+                Label("Export and Send…", systemImage: "photo.badge.arrow.down")
+            }
+            Divider()
+            Button { importRegions() } label: {
+                Label("Import Regions (.reg)…", systemImage: "square.and.arrow.down.on.square")
+            }
+            Button { exportRegions() } label: {
+                Label("Export Regions (.reg)…", systemImage: "square.and.arrow.up.on.square")
+            }
+            .disabled(regionStore.regions.isEmpty)
+        }
+        .disabled(loadedFileURL == nil)
+    }
+
+    var settingsButton: some View {
+        Button { showSettings = true } label: {
+            Label("Settings", systemImage: "gearshape")
         }
     }
 }

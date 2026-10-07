@@ -20,6 +20,9 @@ struct StatisticsGrid: View {
     let unit: String
     var showHeader = false
 
+    /// Smaller text in small windows, so the three columns fit.
+    @Environment(\.compactLayout) private var compact
+
     var body: some View {
         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 4) {
             if showHeader {
@@ -39,7 +42,8 @@ struct StatisticsGrid: View {
                     Text(row.unit)
                         .foregroundStyle(.secondary)
                 }
-                .font(.system(.callout, design: .monospaced))
+                .font(.system(compact ? .caption : .callout, design: .monospaced))
+                .lineLimit(1)
             }
         }
     }
@@ -132,17 +136,26 @@ struct StatisticsDockPanel<SNRPage: View>: View {
     var body: some View {
         CollapsibleDock(expanded: $expanded, glassNamespace: glassNamespace) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    pageTab("Statistics", systemImage: "sum", page: 0)
-                    pageTab("SNR", systemImage: "waveform.path.ecg", page: 1)
-                    Spacer(minLength: 0)
-                    if currentPage == 0 {
-                        Text("Region")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                        regionMenu
+                // One row when there's room; in a narrow window the region menu goes underneath.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        pageTabs
+                        Spacer(minLength: 0)
+                        if currentPage == 0 {
+                            regionPicker
+                        }
+                        DockCollapseButton(expanded: $expanded)
                     }
-                    DockCollapseButton(expanded: $expanded)
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            pageTabs
+                            Spacer(minLength: 0)
+                            DockCollapseButton(expanded: $expanded)
+                        }
+                        if currentPage == 0 {
+                            regionPicker
+                        }
+                    }
                 }
                 Divider()
 
@@ -179,6 +192,7 @@ struct StatisticsDockPanel<SNRPage: View>: View {
                 Image(systemName: "sum")
                 Text(regionName)
                     .font(.subheadline.weight(.semibold))
+                    .layoutPriority(1)
                 if let mean = stats?.mean, mean.isFinite {
                     Text("Mean " + String(format: "%.4g", mean))
                         .font(.subheadline.monospacedDigit())
@@ -187,6 +201,22 @@ struct StatisticsDockPanel<SNRPage: View>: View {
                 Image(systemName: "chevron.up")
                     .font(.caption.weight(.bold))
             }
+        }
+    }
+
+    private var pageTabs: some View {
+        HStack(spacing: 12) {
+            pageTab("Statistics", systemImage: "sum", page: 0)
+            pageTab("SNR", systemImage: "waveform.path.ecg", page: 1)
+        }
+    }
+
+    private var regionPicker: some View {
+        HStack(spacing: 8) {
+            Text("Region")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            regionMenu
         }
     }
 

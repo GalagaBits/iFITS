@@ -113,21 +113,45 @@ extension ContentView {
 
     // MARK: - Opening a FITS file
 
+    /// Open File (⌘O): asks about unsaved changes first, then shows the file picker.
     func openFITSPicker() {
-        importKind = .fits
-        showPicker = true
+        confirmLeavingFile {
+            importKind = .fits
+            showPicker = true
+        }
     }
 
-    /// A FITS file was picked. With more than one image HDU (e.g. JWST's SCI, ERR, DQ, WMAP), asks
-    /// which one to show; with one, opens it straight away.
+    /// A FITS file from the Files app (Open With, or tapping it) or dropped on the window: asks
+    /// about unsaved changes first, then opens it.
     func prepareToOpen(url: URL) {
+        confirmLeavingFile {
+            scanAndOpen(url: url)
+        }
+    }
+
+    /// Opens a FITS file. With more than one image HDU (e.g. JWST's SCI, ERR, DQ, WMAP), asks
+    /// which one to show; with one, opens it straight away.
+    func scanAndOpen(url: URL) {
         let name = url.lastPathComponent
         DispatchQueue.global(qos: .userInitiated).async {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
-                let data = try Data(contentsOf: url, options: .mappedIfSafe)
-                let images = FITSHDUList.scan(data).filter(\.isImage)
+                // A coordinated read downloads a file that's only in iCloud Drive (or another
+                // cloud provider) first, so it can be opened from Files or dropped in place.
+                var readError: Error?
+                var coordinatorError: NSError?
+                var scanned: [FITSHDUInfo] = []
+                NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinatorError) { readURL in
+                    do {
+                        let data = try Data(contentsOf: readURL, options: .mappedIfSafe)
+                        scanned = FITSHDUList.scan(data)
+                    } catch {
+                        readError = error
+                    }
+                }
+                if let error = readError ?? coordinatorError { throw error }
+                let images = scanned.filter(\.isImage)
                 DispatchQueue.main.async {
                     if images.isEmpty {
                         saveError = "\(name) has no image to show. (Its HDUs are tables or empty.)"
@@ -151,6 +175,63 @@ extension ContentView {
         case .open: loadFITSFile(url: request.url, hdu: hdu.index)
         case .noise: attachNoiseFile(url: request.url, hdu: hdu)
         }
+    }
+
+    // MARK: - Unsaved changes
+
+    /// Runs `action` (which opens another file) once the open file's annotations and regions are
+    /// safe. With autosave on, they're saved automatically as the new file loads. With autosave off
+    /// (or after an autosave problem), asks first: Save, Don't Save, or Cancel.
+    func confirmLeavingFile(then action: @escaping () -> Void) {
+        guard let url = loadedFileURL, hasUnsavedEdits else {
+            action()
+            return
+        }
+        if autosaveEnabled, autosaveFailedURL != url {
+            // Save now and open the other file once the save is done (it may be this same file,
+            // opened again from Files).
+            autosaveNow()
+            waitForSave(then: action)
+            return
+        }
+        pendingOpen = PendingOpen(action: action)
+    }
+
+    /// "Save": saves, then opens the other file (stays here if the save fails; the problem is shown).
+    func saveThenContinue(_ pending: PendingOpen) {
+        pendingOpen = nil
+        saveToOriginal()
+        waitForSave {
+            guard !hasUnsavedEdits else { return }
+            continueAfterPrompt(pending)
+        }
+    }
+
+    /// Runs the waiting action once the alert has gone (a file picker can't open while it's closing).
+    func continueAfterPrompt(_ pending: PendingOpen) {
+        pendingOpen = nil
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(350))
+            pending.action()
+        }
+    }
+
+    /// The "Save changes?" alert, on its own empty view (SwiftUI can mix up alerts that share one).
+    var unsavedChangesHost: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .alert("Save changes to “\(fileName)”?",
+                   isPresented: Binding(get: { pendingOpen != nil }, set: { if !$0 { pendingOpen = nil } }),
+                   presenting: pendingOpen) { pending in
+                Button("Save") { saveThenContinue(pending) }
+                Button("Don't Save", role: .destructive) { continueAfterPrompt(pending) }
+                Button("Cancel", role: .cancel) {
+                    pendingOpen = nil
+                    restoreImageFocus()
+                }
+            } message: { _ in
+                Text("Your annotations and regions haven't been saved. If you don't save them, they'll be lost.")
+            }
     }
 
     // MARK: - Renaming the file (tap the title)
@@ -388,4 +469,10 @@ extension ContentView {
             }
         }
     }
+}
+
+/// Opening another file, waiting for the answer to "Save changes?".
+struct PendingOpen: Identifiable {
+    let id = UUID()
+    let action: () -> Void
 }

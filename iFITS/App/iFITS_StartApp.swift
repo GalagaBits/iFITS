@@ -17,6 +17,11 @@ struct iFITS_StartApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(commandCenter)
+                // A FITS file opened from the Files app loads into an open iFITS window (the
+                // frontmost one) instead of a new window each time.
+                // (Only file URLs are preferred, so the Header and Spectra windows still open as
+                // their own windows.)
+                .handlesExternalEvents(preferring: ["file:"], allowing: ["*"])
         }
         // Menu bar: File / View / Mode / Visualization / Annotate (see FITSMenuCommands).
         .commands {

@@ -163,7 +163,7 @@ struct ContentView: View {
 
         var contentTypes: [UTType] {
             switch self {
-            case .fits, .noise: [.fitsFile]
+            case .fits, .noise: UTType.fitsFileTypes
             case .regions: [RegionFileDocument.regionType, UTType(filenameExtension: "reg") ?? .plainText,
                             .plainText, .data]
             }
@@ -212,6 +212,23 @@ struct ContentView: View {
     @Environment(\.openWindow) var openWindow
     /// Shared with the menu bar (FITSMenuCommands).
     @EnvironmentObject var commandCenter: FITSCommandCenter
+
+    // Window size: small windows get the compact, iPhone-style layout (see WindowLayout).
+    @State var windowLayout = WindowLayout()
+    /// The window's area under the toolbar (keyboard ignored), in window coordinates.
+    @State var windowFrame: CGRect = .zero
+    /// Heights of the top-right widgets as last shown, to know whether they still fit.
+    @State var widgetHeights: [String: CGFloat] = [:]
+    /// The full Pixel Info, opened from the one-line Pixel Info of a small window.
+    @State var showPixelInfoPopover = false
+    /// The Render Configuration was full size before the window got small (it goes back afterwards).
+    @State var renderPanelWasFull = false
+
+    // Opening files from the Files app, drag and drop, and unsaved changes
+    /// A FITS file is being dragged over the window.
+    @State var isDropTargeted = false
+    /// Opening another file, waiting for Save / Don't Save / Cancel.
+    @State var pendingOpen: PendingOpen? = nil
 
     var showRenderPanel: Bool {
         selectedMode == "V" && fitsImage != nil && imageStats != nil
@@ -302,7 +319,8 @@ struct ContentView: View {
                 .fileImporter(isPresented: $showPicker, allowedContentTypes: importKind.contentTypes) { result in
                     if case .success(let url) = result {
                         switch importKind {
-                        case .fits: prepareToOpen(url: url)
+                        // Unsaved changes were already asked about before the picker opened.
+                        case .fits: scanAndOpen(url: url)
                         case .regions: loadRegionFile(url: url)
                         case .noise: loadNoiseFile(url: url)
                         }
@@ -319,7 +337,9 @@ struct ContentView: View {
 
     /// Every layer of the window, plus what happens when state changes.
     var windowLayers: some View {
-        ZStack {
+        // Window size (compact layout), opening files from Files, and drag and drop
+        // (ContentView+Window.swift).
+        withWindowServices(ZStack {
             imageArea
             modeButtons
             topRightPanels
@@ -334,7 +354,9 @@ struct ContentView: View {
             shareAnchorLayer
             colorbarLayer
             bottomRightLayer
-        }
+            unsavedChangesHost
+            dropHighlight
+        })
         .onChange(of: renderSettings) { _, newSettings in
             renderer.request(newSettings)
         }
@@ -592,41 +614,44 @@ struct ContentView: View {
         }
     }
 
-    /// The V A R S buttons on the left.
+    /// The V A R S buttons on the left (in a small window they're in the toolbar's » menu).
     var modeButtons: some View {
         HStack {
-            VStack(spacing: 35) {
+            if !windowLayout.isCompact {
                 VStack(spacing: 35) {
-                    ForEach(modes, id: \.self) { mode in
-                        Button(action: { selectMode(mode) }) {
-                            ZStack {
-                                if selectedMode == mode {
+                    VStack(spacing: 35) {
+                        ForEach(modes, id: \.self) { mode in
+                            Button(action: { selectMode(mode) }) {
+                                ZStack {
+                                    if selectedMode == mode {
+                                        Circle()
+                                            .fill(.orange.opacity(0.95))
+                                    }
+
                                     Circle()
-                                        .fill(.orange.opacity(0.95))
+                                        .glassEffect(.regular, in: Circle())
+
+                                    Text(mode)
+                                        .font(.largeTitle)
+                                        .foregroundColor(.primary)
                                 }
-
-                                Circle()
-                                    .glassEffect(.regular, in: Circle())
-
-                                Text(mode)
-                                    .font(.largeTitle)
-                                    .foregroundColor(.primary)
+                                .frame(width: 70, height: 70)
+                                .contentShape(Circle())
+                                .hoverEffect(.lift)
                             }
-                            .frame(width: 70, height: 70)
-                            .contentShape(Circle())
-                            .hoverEffect(.lift)
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
                     }
+                    // The colorbar goes below these buttons.
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: {
+                        modeButtonsBottom = $0
+                    }
+                    Spacer()
                 }
-                // The colorbar goes below these buttons.
-                .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).maxY } action: {
-                    modeButtonsBottom = $0
-                }
-                Spacer()
+                .padding(.top, 60)
+                .padding(.leading, 40)
+                .transition(.move(edge: .leading).combined(with: .opacity))
             }
-            .padding(.top, 60)
-            .padding(.leading, 40)
 
             Spacer()
         }
@@ -645,44 +670,108 @@ struct ContentView: View {
         }
     }
 
-    /// Top right: Pixel Info, the statistics box and the spectrum box.
+    /// Top right: Pixel Info, the statistics box and the spectrum box. The statistics and spectrum
+    /// boxes step aside when there's no room for them (small windows, or above a tall dock) and come
+    /// back when there is, unless they were closed.
     @ViewBuilder
     var topRightPanels: some View {
-        // Top right, under the toolbar buttons: the pixel inspector (not in A mode)
-        // and the statistics box (every mode, until closed).
         if fitsImage != nil {
             VStack {
                 HStack(alignment: .top) {
-                    Spacer()
+                    Spacer(minLength: 0)
                     VStack(alignment: .trailing, spacing: 10) {
                         if let pixel = inspectedPixel, selectedMode != "A" {
-                            PixelInfoPanel(pixel: pixel,
-                                           value: renderer.value(column: pixel.column, row: pixel.row),
-                                           wcs: wcs,
-                                           header: headerDict,
-                                           imageHeight: Int(imageHeight),
-                                           channel: cubeSource == nil ? 0 : animator.index(onAxis: 0),
-                                           snr: snrValue(at: pixel),
-                                           expanded: $pixelInfoExpanded)
-                                .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
+                            if windowLayout.isCompact {
+                                pixelInfoPill(pixel)
+                            } else {
+                                pixelInfoPanel(pixel)
+                                    .reportsHeight("pixel", to: $widgetHeights)
+                                    .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
+                            }
                         }
-                        // The statistics and spectrum boxes step aside while drawing (A mode)
-                        // and come back afterwards.
-                        if showStatsBox, selectedMode != "A" {
+                        // The statistics and spectrum boxes also step aside while drawing (A mode).
+                        if statsWidgetShown {
                             StatisticsBox(regionName: regionStore.statsRegion?.name ?? "Entire Image",
                                           stats: regionStats,
                                           unit: valueUnit,
                                           onClose: { withAnimation(.snappy) { showStatsBox = false } })
+                                .reportsHeight("stats", to: $widgetHeights)
                                 .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
                         }
-                        spectrumBox
+                        if spectrumWidgetShown {
+                            spectrumBox
+                                .reportsHeight("spectrum", to: $widgetHeights)
+                        }
                     }
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
             .padding(.top, 8)
-            .padding(.trailing, 16)
+            .padding(.horizontal, windowLayout.isCompact ? 12 : 16)
         }
+    }
+
+    /// The full Pixel Info box.
+    func pixelInfoPanel(_ pixel: InspectedPixel, inPopover: Bool = false) -> some View {
+        PixelInfoPanel(pixel: pixel,
+                       value: renderer.value(column: pixel.column, row: pixel.row),
+                       wcs: wcs,
+                       header: headerDict,
+                       imageHeight: Int(imageHeight),
+                       channel: cubeSource == nil ? 0 : animator.index(onAxis: 0),
+                       snr: snrValue(at: pixel),
+                       expanded: inPopover ? .constant(true) : $pixelInfoExpanded,
+                       inPopover: inPopover)
+    }
+
+    /// Small window: Pixel Info on one line; tap it for the full box.
+    func pixelInfoPill(_ pixel: InspectedPixel) -> some View {
+        PixelInfoPill(pixel: pixel,
+                      value: renderer.value(column: pixel.column, row: pixel.row),
+                      imageHeight: Int(imageHeight),
+                      unit: valueUnit)
+            .onTapGesture { showPixelInfoPopover = true }
+            .popover(isPresented: $showPixelInfoPopover, arrowEdge: .top) {
+                pixelInfoPanel(pixel, inPopover: true)
+                    .presentationCompactAdaptation(.popover)
+            }
+            .frame(maxWidth: max(140, windowLayout.size.width - 24), alignment: .trailing)
+            .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
+    }
+
+    /// Room in the top-right column: from under the toolbar down to the bottom dock (where the dock
+    /// reaches under the column), the small animator, or the bottom of the window.
+    var widgetRoom: CGFloat {
+        guard windowFrame.height > 0 else { return .greatestFiniteMagnitude }
+        var bottom = windowFrame.height - 16
+        if dockVisible, dockFrame.height > 0, dockFrame.maxX > windowFrame.maxX - 360 {
+            bottom = min(bottom, dockFrame.minY - windowFrame.minY - 12)
+        }
+        if miniAnimatorVisible { bottom -= 56 }
+        return bottom - 8
+    }
+
+    /// Whether these top-right widgets fit one under the other (heights as last shown, or estimates).
+    func widgetsFit(_ keys: [String]) -> Bool {
+        let estimates: [String: CGFloat] = ["pixel": 200, "stats": 230, "spectrum": 240]
+        let total = keys.reduce(CGFloat(0)) { $0 + (widgetHeights[$1] ?? estimates[$1] ?? 200) }
+        return total + CGFloat(max(0, keys.count - 1)) * 10 <= widgetRoom
+    }
+
+    /// "pixel" while Pixel Info is in the top-right column.
+    var pixelWidgetKeys: [String] {
+        inspectedPixel != nil && selectedMode != "A" && !windowLayout.isCompact ? ["pixel"] : []
+    }
+
+    /// The statistics box is on screen (open, not drawing, and there's room).
+    var statsWidgetShown: Bool {
+        showStatsBox && selectedMode != "A" && !windowLayout.isCompact && widgetsFit(pixelWidgetKeys + ["stats"])
+    }
+
+    /// The spectrum box is on screen (open, not in Spectra or A mode, and there's room).
+    var spectrumWidgetShown: Bool {
+        spectrumBoxVisible && !windowLayout.isCompact
+            && widgetsFit(pixelWidgetKeys + (statsWidgetShown ? ["stats"] : []) + ["spectrum"])
     }
 
     /// "Saved" confirmation, top center.
@@ -692,12 +781,15 @@ struct ContentView: View {
             VStack {
                 Text(message)
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                     .glassEffect(.regular, in: Capsule())
                 Spacer()
             }
             .padding(.top, 8)
+            .padding(.horizontal, 16)
             .allowsHitTesting(false)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
@@ -718,9 +810,22 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, alignment: isAnnotating ? .leading : .center)
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
-            .padding(.horizontal, 24)
+            .padding(.leading, dockLeadingInset)
+            .padding(.trailing, windowLayout.isCompact ? 12 : 24)
             .padding(.bottom, 8)
+            // Sized before the spacer above it, so a tall dock gets all the room it's allowed.
+            .layoutPriority(1)
         }
+    }
+
+    /// Left edge of the bottom dock. When the window is too short for the dock to fit under the
+    /// V A R S buttons, the dock starts to the right of them and the colorbar instead.
+    var dockLeadingInset: CGFloat {
+        if windowLayout.isCompact { return 12 }
+        guard modeButtonsBottom > 0, windowFrame.height > 0, panelHeight > 0 else { return 24 }
+        let buttonsBottom = modeButtonsBottom - windowFrame.minY
+        let dockTop = windowFrame.height - 8 - panelHeight
+        return dockTop < buttonsBottom + 12 ? 40 + VerticalColorbar.width + 12 : 24
     }
 
     /// The dock panel for the current mode.
@@ -803,7 +908,8 @@ struct ContentView: View {
     /// collapsed, until closed with its ✕).
     @ViewBuilder
     var bottomRightLayer: some View {
-        if miniAnimatorVisible {
+        // A temporary widget: it steps aside in a small window and comes back when there's room.
+        if miniAnimatorVisible, !windowLayout.isCompact {
             VStack {
                 Spacer()
                 HStack {
@@ -841,7 +947,7 @@ struct ContentView: View {
                                       pillOnly: space.pillOnly,
                                       expanded: $colorbarExpanded)
                     }
-                    .padding(.leading, 40)
+                    .padding(.leading, colorbarLeading)
                     .padding(.bottom, max(0, frame.maxY - space.bottom))
                     .frame(width: frame.width, height: frame.height, alignment: .bottomLeading)
                 }
@@ -853,16 +959,22 @@ struct ContentView: View {
     /// the top of the bottom dock if the dock reaches the colorbar's column.
     func colorbarSpace(in frame: CGRect) -> (bottom: CGFloat, barHeight: CGFloat, pillOnly: Bool, hidden: Bool) {
         var bottom = frame.maxY - 16
-        let columnRight = frame.minX + 40 + VerticalColorbar.width + 12
+        let columnRight = frame.minX + colorbarLeading + VerticalColorbar.width + 12
         if dockVisible, dockFrame.width > 0, dockFrame.minX < columnRight {
             bottom = min(bottom, dockFrame.minY - 16)
         }
-        let top = (modeButtonsBottom > 0 ? modeButtonsBottom : frame.minY + 445) + 24
+        // Small window (no V A R S buttons): from just under the one-line Pixel Info.
+        let top = windowLayout.isCompact
+            ? frame.minY + 52
+            : (modeButtonsBottom > 0 ? modeButtonsBottom : frame.minY + 445) + 24
         let room = bottom - top
         // The expanded colorbar adds about 50 points (chevron and padding) to its bar.
         let bar = min(300, room - 50)
         return (bottom, max(80, bar), bar < 100, room < 80)
     }
+
+    /// The colorbar's distance from the left edge.
+    var colorbarLeading: CGFloat { windowLayout.isCompact ? 12 : 40 }
 
     // MARK: - Modes
 

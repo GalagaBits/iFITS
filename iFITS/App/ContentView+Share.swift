@@ -29,7 +29,7 @@ extension ContentView {
     }
 
     /// Runs `action` once the current save has finished (gives up waiting after 10 s).
-    private func waitForSave(then action: @escaping () -> Void, waited: Double = 0) {
+    func waitForSave(then action: @escaping () -> Void, waited: Double = 0) {
         if !isSaving || waited > 10 {
             action()
             return
@@ -95,12 +95,13 @@ extension ContentView {
 
     // MARK: Hosts (sheets sit on their own empty views)
 
-    /// Where the FITS share sheet points from: just under the toolbar's share button.
+    /// Where the FITS share sheet points from: just under the toolbar's share button (or the »
+    /// menu in a narrow window).
     var shareAnchorLayer: some View {
         ShareAnchor(presenter: toolbarSharer)
             .frame(width: 2, height: 2)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            .padding(.trailing, 112)
+            .padding(.trailing, windowLayout.foldsToolbar ? 30 : 112)
             .allowsHitTesting(false)
     }
 
@@ -139,6 +140,30 @@ struct SettingsSheet: View {
                     Text("Saving")
                 } footer: {
                     Text("Annotations and regions are saved into the FITS file automatically as you work. Turn this off to save only with Save (⌘S).")
+                }
+                
+                Section {
+                    Link(destination: URL(string: "https://galagabits.github.io/iFITS/privacy/")!) {
+                        Label("Privacy Policy", systemImage: "hand.raised")
+                    }
+                    Link(destination: URL(string: "https://galagabits.github.io/iFITS/support/")!) {
+                        Label("Help & Support", systemImage: "questionmark.circle")
+                    }
+                    Link(destination: URL(string: "https://galagabits.github.io/iFITS")!) {
+                        Label("Documentation", systemImage: "text.document")
+                    }
+                    
+                    Link(destination: URL(string: "https://github.com/GalagaBits/iFITS")!) {
+                        Label("GitHub Repository", systemImage: "chevron.left.forwardslash.chevron.right")
+                    }
+                    
+                    Link(destination: URL(string: "https://github.com/GalagaBits/iFITS/blob/main/LICENSE")!) {
+                        Label("License", systemImage: "licenseplate")
+                    }
+                } header: {
+                    Text("About")
+                } footer: {
+                    Text("iFITS \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
                 }
             }
             .navigationTitle("Settings")

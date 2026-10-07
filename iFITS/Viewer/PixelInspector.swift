@@ -61,6 +61,9 @@ struct PixelInfoPanel: View {
     var snr: Float? = nil
     /// Full table, or just "(x, y) pix" and the value (the chevron switches).
     @Binding var expanded: Bool
+    /// Shown in a popover (from the one-line Pixel Info of a small window): no glass of its own,
+    /// no collapse button.
+    var inPopover = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -79,22 +82,24 @@ struct PixelInfoPanel: View {
                 Text("Pixel Info")
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 12)
-                Button {
-                    withAnimation(DockAnimation.stage(reduceMotion)) { expanded.toggle() }
-                } label: {
-                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 26, height: 26)
-                        .background(.quaternary, in: Circle())
-                        .contentShape(Circle())
+                if !inPopover {
+                    Button {
+                        withAnimation(DockAnimation.stage(reduceMotion)) { expanded.toggle() }
+                    } label: {
+                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 26, height: 26)
+                            .background(.quaternary, in: Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
+                    .accessibilityLabel(expanded ? "Collapse Pixel Info" : "Expand Pixel Info")
                 }
-                .buttonStyle(.plain)
-                .hoverEffect(.highlight)
-                .accessibilityLabel(expanded ? "Collapse Pixel Info" : "Expand Pixel Info")
             }
 
-            if expanded {
+            if expanded || inPopover {
                 table
             } else {
                 VStack(alignment: .leading, spacing: 0) {
@@ -110,7 +115,7 @@ struct PixelInfoPanel: View {
         .padding(14)
         // Size to the content only, so the box stays compact in the top-right corner.
         .fixedSize()
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .glassEffect(inPopover ? .identity : .regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
     /// Collapsed: "(40, 35) pix" and "1555.21 MJy/sr", units smaller and gray.
@@ -191,7 +196,10 @@ struct PixelInfoPanel: View {
         return rows
     }
 
-    private var valueText: String {
+    private var valueText: String { Self.valueText(value) }
+
+    /// A pixel value as text: 6 significant digits, "NaN", or "—" (no value).
+    static func valueText(_ value: Float?) -> String {
         guard let value else { return "—" }
         if value.isNaN { return "NaN" }
         return String(format: "%.6g", Double(value))
@@ -267,5 +275,43 @@ struct PixelInfoPanel: View {
         let s = Double(cs % 6_000) / 100
         let sign = (degrees < 0 && cs > 0) ? "−" : "+"
         return sign + String(format: "%02ld:%02ld:%05.2f", Int(d), Int(m), s)
+    }
+}
+
+/// Pixel Info in a small window: one line, "(x, y) pix" and the value, in a glass pill (like the
+/// docks' smallest size). Tap it for the full table.
+struct PixelInfoPill: View {
+    let pixel: InspectedPixel
+    let value: Float?
+    /// Image height in pixels (to convert display rows to FITS y).
+    let imageHeight: Int
+    /// BUNIT.
+    let unit: String
+
+    var body: some View {
+        // FITS pixel numbers are 1-based, with y counting up from the bottom.
+        let fx = pixel.column + 1, fy = imageHeight - pixel.row
+        HStack(spacing: 8) {
+            Image(systemName: pixel.source.symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("(\(fx), \(fy))\(small(" pix"))")
+                .layoutPriority(1)
+            Text("\(PixelInfoPanel.valueText(value))\(small(unit.isEmpty ? "" : " " + unit))")
+        }
+        .font(.system(.caption, design: .monospaced))
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(Capsule())
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Shows the full Pixel Info")
+    }
+
+    /// Units: smaller and gray.
+    private func small(_ s: String) -> Text {
+        Text(s).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
     }
 }

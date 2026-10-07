@@ -41,6 +41,7 @@ struct RegionPanel: View {
                 Text("\(store.regions.count) total")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 Image(systemName: "chevron.up")
                     .font(.caption.weight(.bold))
             }
@@ -57,30 +58,50 @@ struct RegionPanel: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Label("Regions", systemImage: "square.on.circle")
-                .font(.headline)
-                .lineLimit(1)
-                .fixedSize()
-            toolPicker
-            Spacer(minLength: 0)
-            Menu {
-                Button(action: onImport) {
-                    Label("Import Regions (.reg)…", systemImage: "square.and.arrow.down.on.square")
-                }
-                Button(action: onExport) {
-                    Label("Export Regions (.reg)…", systemImage: "square.and.arrow.up.on.square")
-                }
-                .disabled(store.regions.isEmpty)
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.title3)
-                    .frame(width: 36, height: 36)
-                    .contentShape(Rectangle())
+        // One row when there's room; in a narrow window the shape tools go on a second row.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                title
+                toolPicker
+                Spacer(minLength: 0)
+                filesMenu
+                DockCollapseButton(expanded: $expanded)
             }
-            .accessibilityLabel("Region files")
-            DockCollapseButton(expanded: $expanded)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    title
+                    Spacer(minLength: 0)
+                    filesMenu
+                    DockCollapseButton(expanded: $expanded)
+                }
+                toolPicker
+            }
         }
+    }
+
+    private var title: some View {
+        Label("Regions", systemImage: "square.on.circle")
+            .font(.headline)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    private var filesMenu: some View {
+        Menu {
+            Button(action: onImport) {
+                Label("Import Regions (.reg)…", systemImage: "square.and.arrow.down.on.square")
+            }
+            Button(action: onExport) {
+                Label("Export Regions (.reg)…", systemImage: "square.and.arrow.up.on.square")
+            }
+            .disabled(store.regions.isEmpty)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.title3)
+                .frame(width: 36, height: 36)
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Region files")
     }
 
     private var toolPicker: some View {

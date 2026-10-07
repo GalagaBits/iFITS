@@ -15,6 +15,10 @@ struct ARColorbar: View {
     let lo: Double
     let hi: Double
     let unit: String
+    /// Shorter in a small window.
+    var barHeight: CGFloat = 300
+    /// No room for the bar: just its pill.
+    var pillOnly = false
     @Binding var expanded: Bool
     var onSelect: (Colormap) -> Void
     var onToggleInverted: () -> Void
@@ -26,8 +30,9 @@ struct ARColorbar: View {
                          hi: hi,
                          unit: unit,
                          showsOpacity: true,
-                         barHeight: 300,
+                         barHeight: barHeight,
                          expanded: $expanded,
+                         pillOnly: pillOnly,
                          onSelect: onSelect,
                          onToggleInverted: onToggleInverted)
     }

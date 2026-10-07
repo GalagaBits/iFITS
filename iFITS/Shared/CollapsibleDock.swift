@@ -20,17 +20,22 @@ enum DockAnimation {
 struct CollapsibleDock<Full: View, Mini: View>: View {
     @Binding var expanded: Bool
     let glassNamespace: Namespace.ID
+    /// Scroll the content when it's taller than the window allows (see WindowLayout). Off for
+    /// panels that size themselves to fit (Spectra).
+    private let limitsHeight: Bool
     private let full: Full
     private let mini: Mini
 
     @State private var dragY: CGFloat = 0
     @State private var isDragging = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.compactLayout) private var compact
 
-    init(expanded: Binding<Bool>, glassNamespace: Namespace.ID,
+    init(expanded: Binding<Bool>, glassNamespace: Namespace.ID, limitsHeight: Bool = true,
          @ViewBuilder full: () -> Full, @ViewBuilder mini: () -> Mini) {
         _expanded = expanded
         self.glassNamespace = glassNamespace
+        self.limitsHeight = limitsHeight
         self.full = full()
         self.mini = mini()
     }
@@ -40,9 +45,14 @@ struct CollapsibleDock<Full: View, Mini: View>: View {
             if expanded {
                 VStack(spacing: 6) {
                     grabber
-                    full
+                    if limitsHeight {
+                        // Grabber, spacing and padding take about 44 points.
+                        DockHeightLimit(reserved: 44) { full }
+                    } else {
+                        full
+                    }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, compact ? 14 : 20)
                 .padding(.top, 4)
                 .padding(.bottom, 16)
                 .frame(maxWidth: 1000)
@@ -50,6 +60,7 @@ struct CollapsibleDock<Full: View, Mini: View>: View {
                 .glassEffectID("renderPanel", in: glassNamespace)
             } else {
                 mini
+                    .lineLimit(1)
                     .padding(.horizontal, 16)
                     .padding(.vertical, 12)
                     .contentShape(Capsule())
@@ -157,6 +168,8 @@ struct DockCollapseButton: View {
 /// Label for a pop-up menu in a dock panel (same look as the Render Configuration menus).
 struct DockMenuLabel: View {
     let text: String
+    /// Narrower in small windows.
+    var minWidth: CGFloat = 160
 
     var body: some View {
         HStack(spacing: 6) {
@@ -167,7 +180,7 @@ struct DockMenuLabel: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .frame(minWidth: 160)
+        .frame(minWidth: minWidth)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(Rectangle())
     }

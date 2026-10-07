@@ -13,14 +13,18 @@ struct AnnotationBar: View {
     let glassNamespace: Namespace.ID
 
     @State private var confirmClear = false
+    /// Small window: just the buttons.
+    @Environment(\.compactLayout) private var compact
 
     var body: some View {
         HStack(spacing: 2) {
-            Label("Annotate", systemImage: "pencil.tip.crop.circle")
-                .font(.headline)
-                .padding(.horizontal, 8)
+            if !compact {
+                Label("Annotate", systemImage: "pencil.tip.crop.circle")
+                    .font(.headline)
+                    .padding(.horizontal, 8)
 
-            Divider().frame(height: 24).padding(.horizontal, 4)
+                Divider().frame(height: 24).padding(.horizontal, 4)
+            }
 
             barButton("arrow.uturn.backward", label: "Undo", disabled: !model.canUndo) {
                 model.undoLast()
@@ -52,7 +56,7 @@ struct AnnotationBar: View {
                 Text("You can undo this.")
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, compact ? 6 : 10)
         .padding(.vertical, 8)
         .glassEffect(.regular, in: Capsule())
         .glassEffectID("renderPanel", in: glassNamespace)
@@ -65,7 +69,7 @@ struct AnnotationBar: View {
                 .font(.title3)
                 .foregroundStyle(active ? Color.orange : Color.primary)
                 .contentTransition(.symbolEffect(.replace))
-                .frame(width: 42, height: 38)
+                .frame(width: compact ? 38 : 42, height: 38)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

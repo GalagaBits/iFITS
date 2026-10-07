@@ -10,6 +10,7 @@ import UniformTypeIdentifiers
 
 /// A FITS file's bytes, for "Save as Copy…".
 nonisolated struct FITSFileDocument: FileDocument {
+    /// The type of files ending in .fits (so copies are saved with that extension).
     static let fitsType = UTType(filenameExtension: "fits") ?? .data
     static var readableContentTypes: [UTType] { [fitsType] }
 

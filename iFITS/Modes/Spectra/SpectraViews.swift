@@ -124,6 +124,8 @@ struct SpectrumSourceMenu: View {
     /// The sources in use, in colour order (deleted regions already dropped).
     let selected: [SpectrumSource]
     let currentName: String
+    /// Narrower in small windows.
+    var labelMinWidth: CGFloat = 160
 
     var body: some View {
         Menu {
@@ -147,7 +149,7 @@ struct SpectrumSourceMenu: View {
                 }
             }
         } label: {
-            DockMenuLabel(text: currentName)
+            DockMenuLabel(text: currentName, minWidth: labelMinWidth)
         }
         .menuOrder(.fixed)
         .menuActionDismissBehavior(.disabled)
@@ -175,6 +177,8 @@ struct SpectrumSourceMenu: View {
 struct SpectrumStatisticMenu: View {
     @Bindable var model: SpectrumModel
     let isSinglePixel: Bool
+    /// Narrower in small windows.
+    var labelMinWidth: CGFloat = 160
 
     var body: some View {
         Menu {
@@ -184,8 +188,7 @@ struct SpectrumStatisticMenu: View {
                 }
             }
         } label: {
-            DockMenuLabel(text: model.statistic.title)
-                .frame(minWidth: 120)
+            DockMenuLabel(text: model.statistic.title, minWidth: labelMinWidth)
         }
         .menuOrder(.fixed)
         .disabled(isSinglePixel)
@@ -206,64 +209,69 @@ struct SpectraDockPanel: View {
     /// "Export and Send" a PNG / JPEG of the spectra.
     var onExport: () -> Void
 
+    @Environment(\.compactLayout) private var compact
+    @Environment(\.dockMaxHeight) private var dockMaxHeight
+
+    /// The graph's height: 230 points, or less in a short window so the whole dock fits (the dock
+    /// doesn't scroll, so dragging the orange line never fights a scroll view).
+    private var graphHeight: CGFloat {
+        guard dockMaxHeight.isFinite else { return 230 }
+        // Grabber, header, readout, spacing and padding (+ the legend).
+        let other: CGFloat = (compact ? 190 : 150) + (display.series.count > 1 ? 30 : 0)
+        return min(230, max(80, dockMaxHeight - other))
+    }
+
     var body: some View {
-        CollapsibleDock(expanded: $model.expanded, glassNamespace: glassNamespace) {
+        CollapsibleDock(expanded: $model.expanded, glassNamespace: glassNamespace, limitsHeight: false) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 12) {
-                    Label("Spectra", systemImage: "chart.xyaxis.line")
-                        .font(.headline)
-                        .lineLimit(1)
-                        .fixedSize()
-                    Spacer(minLength: 0)
-                    Text("Region")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    SpectrumSourceMenu(model: model, regions: regions, selected: display.sources,
-                                       currentName: display.sourceName)
-                    Text("Statistic")
-                        .font(.subheadline)
-                        .foregroundStyle(display.isSinglePixel ? .tertiary : .secondary)
-                    SpectrumStatisticMenu(model: model, isSinglePixel: display.isSinglePixel)
-                    Button(action: onExport) {
-                        Image(systemName: "square.and.arrow.up")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 36, height: 36)
-                            .contentShape(Rectangle())
+                // One row when there's room; in a narrow window the menus go on a second row.
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) {
+                        title
+                        Spacer(minLength: 0)
+                        Text("Region")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        sourceMenu(minWidth: 160)
+                        Text("Statistic")
+                            .font(.subheadline)
+                            .foregroundStyle(display.isSinglePixel ? .tertiary : .secondary)
+                        statisticMenu(minWidth: 120)
+                        buttons
                     }
-                    .buttonStyle(.plain)
-                    .hoverEffect(.highlight)
-                    .disabled(display.lines.isEmpty)
-                    .accessibilityLabel("Export and send the spectra")
-                    Button(action: onPopOut) {
-                        Image(systemName: "macwindow.badge.plus")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 36, height: 36)
-                            .contentShape(Rectangle())
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 12) {
+                            title
+                            Spacer(minLength: 0)
+                            buttons
+                        }
+                        HStack(spacing: 8) {
+                            sourceMenu(minWidth: 120)
+                            statisticMenu(minWidth: 96)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .hoverEffect(.highlight)
-                    .accessibilityLabel("Open spectra in a new window")
-                    DockCollapseButton(expanded: $model.expanded)
                 }
                 Divider()
                 HStack(spacing: 10) {
-                    Text(display.readout(compact: false))
+                    Text(display.readout(compact: compact))
                         .font(.callout.monospacedDigit())
                         .lineLimit(1)
                     Spacer(minLength: 8)
                     if model.isComputing, model.showsProgress {
                         ProgressView(value: model.progress)
-                            .frame(width: 120)
+                            .frame(width: compact ? 70 : 120)
                     } else if model.zoom != nil {
                         Button {
                             model.zoom = nil
                         } label: {
                             Label("Zoom Out", systemImage: "arrow.up.left.and.arrow.down.right")
                                 .font(.subheadline)
+                                .lineLimit(1)
                         }
                         .buttonStyle(.plain)
                         .hoverEffect(.highlight)
-                    } else {
+                        .fixedSize()
+                    } else if !compact {
                         Text("Drag the orange line · Pinch or two fingers up / down to zoom")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -272,10 +280,11 @@ struct SpectraDockPanel: View {
                 }
                 SpectrumGraph(lines: display.lines, axis: display.axis, yTitle: display.yTitle,
                               current: display.current, zoom: $model.zoom,
+                              compact: compact,
                               placeholder: display.placeholder, onChannel: onChannel)
-                    .frame(height: 230)
+                    .frame(height: graphHeight)
                 if display.series.count > 1 {
-                    SpectrumLegend(display: display)
+                    SpectrumLegend(display: display, compact: compact)
                 }
             }
         } mini: {
@@ -287,9 +296,52 @@ struct SpectraDockPanel: View {
                 Text(display.statisticTitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .fixedSize()
                 Image(systemName: "chevron.up")
                     .font(.caption.weight(.bold))
             }
+        }
+    }
+
+    private var title: some View {
+        Label("Spectra", systemImage: "chart.xyaxis.line")
+            .font(.headline)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    private func sourceMenu(minWidth: CGFloat) -> some View {
+        SpectrumSourceMenu(model: model, regions: regions, selected: display.sources,
+                           currentName: display.sourceName, labelMinWidth: minWidth)
+    }
+
+    private func statisticMenu(minWidth: CGFloat) -> some View {
+        SpectrumStatisticMenu(model: model, isSinglePixel: display.isSinglePixel, labelMinWidth: minWidth)
+    }
+
+    /// Export, pop out, minimize.
+    private var buttons: some View {
+        HStack(spacing: 0) {
+            Button(action: onExport) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+            .disabled(display.lines.isEmpty)
+            .accessibilityLabel("Export and send the spectra")
+            Button(action: onPopOut) {
+                Image(systemName: "macwindow.badge.plus")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 36, height: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+            .accessibilityLabel("Open spectra in a new window")
+            DockCollapseButton(expanded: $model.expanded)
         }
     }
 }

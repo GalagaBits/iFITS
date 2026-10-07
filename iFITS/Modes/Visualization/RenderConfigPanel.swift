@@ -36,6 +36,8 @@ struct RenderConfigPanel: View {
     @State private var dragY: CGFloat = 0
     @State private var isDragging = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Small window: the histogram sits above the controls, and the panel scrolls if it's too tall.
+    @Environment(\.compactLayout) private var compact
 
     /// Spring used for every stage change: a modest iOS-style bounce.
     private var stageAnimation: Animation {
@@ -76,41 +78,60 @@ struct RenderConfigPanel: View {
             HStack {
                 Label("Render Configuration", systemImage: "slider.horizontal.3")
                     .font(.headline)
-                Spacer()
+                    .lineLimit(1)
+                Spacer(minLength: 4)
                 stageButton("rectangle.compress.vertical", to: .compact, help: "Smaller panel")
                 stageButton("chevron.down", to: .mini, help: "Minimize panel")
             }
             .contentShape(Rectangle())
             .gesture(stageDrag)
 
-            HStack(alignment: .top, spacing: 20) {
-                VStack(alignment: .leading, spacing: 4) {
-                    ClipHistogramView(stats: stats, settings: settings) { lo, hi in
-                        onManualClip(lo, hi)
+            // Grabber, header, spacing and padding take about 90 points.
+            DockHeightLimit(reserved: 90) {
+                // Side by side when there's room; otherwise the histogram above the controls.
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .top, spacing: 20) {
+                        histogram(height: 170)
+                            .frame(minWidth: 260, maxWidth: .infinity)
+                        controlsGrid
+                            .frame(width: 340)
                     }
-                    .frame(height: 170)
-                    HStack {
-                        Text(NumberField.format(stats.histLo))
-                        Spacer()
-                        Text("Pixel value · drag the red lines")
-                        Spacer()
-                        Text(NumberField.format(stats.histHi))
+                    VStack(alignment: .leading, spacing: 14) {
+                        histogram(height: compact ? 110 : 150)
+                        controlsGrid
                     }
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity)
-
-                controlsGrid
-                    .frame(width: 340)
             }
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, compact ? 14 : 20)
         .padding(.top, 4)
         .padding(.bottom, 16)
         .frame(maxWidth: 1000)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .glassEffectID("renderPanel", in: glassNamespace)
+    }
+
+    /// The histogram with its range and hint underneath.
+    private func histogram(height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ClipHistogramView(stats: stats, settings: settings) { lo, hi in
+                onManualClip(lo, hi)
+            }
+            .frame(height: height)
+            HStack {
+                Text(NumberField.format(stats.histLo))
+                Spacer(minLength: 4)
+                if !compact {
+                    Text("Pixel value · drag the red lines")
+                        .lineLimit(1)
+                    Spacer(minLength: 4)
+                }
+                Text(NumberField.format(stats.histHi))
+            }
+            .font(.caption2.monospacedDigit())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
     }
 
     private var compactPanel: some View {
@@ -143,7 +164,7 @@ struct RenderConfigPanel: View {
                 }
             }
         }
-        .padding(.horizontal, 18)
+        .padding(.horizontal, compact ? 12 : 18)
         .padding(.top, 2)
         .padding(.bottom, 12)
         .frame(maxWidth: 1000)
@@ -157,9 +178,11 @@ struct RenderConfigPanel: View {
                 .frame(width: 44, height: 12)
             Text(settings.scaling.title)
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
             Text(clipSelection.title)
                 .font(.subheadline.monospacedDigit())
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             Image(systemName: "chevron.up")
                 .font(.caption.weight(.bold))
         }
@@ -314,7 +337,8 @@ struct RenderConfigPanel: View {
 
     private func rowLabel(_ text: String) -> some View {
         Text(text)
-            .font(.subheadline)
+            .font(compact ? .caption : .subheadline)
+            .lineLimit(1)
             .foregroundStyle(.secondary)
             .gridColumnAlignment(.trailing)
     }
@@ -337,7 +361,7 @@ struct RenderConfigPanel: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
-        .frame(minWidth: 110)
+        .frame(minWidth: compact ? 90 : 110)
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .contentShape(Rectangle())
     }
@@ -428,7 +452,7 @@ struct RenderConfigPanel: View {
         } label: {
             HStack(spacing: 8) {
                 ColormapSwatch(colormap: settings.colormap, inverted: settings.inverted)
-                    .frame(width: 90, height: 14)
+                    .frame(width: compact ? 44 : 90, height: 14)
                 Text(settings.colormap.title)
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")

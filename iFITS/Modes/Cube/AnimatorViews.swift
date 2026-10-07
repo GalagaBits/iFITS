@@ -44,6 +44,9 @@ struct AnimatorPanel: View {
     @Binding var expanded: Bool
     let glassNamespace: Namespace.ID
 
+    /// Small window: each axis's name and channel above its sliders.
+    @Environment(\.compactLayout) private var compact
+
     var body: some View {
         CollapsibleDock(expanded: $expanded, glassNamespace: glassNamespace) {
             VStack(alignment: .leading, spacing: 10) {
@@ -68,6 +71,7 @@ struct AnimatorPanel: View {
                 if let axis = animator.currentAxis {
                     Text("\(axis.name) \(animator.current)")
                         .font(.subheadline.weight(.semibold).monospacedDigit())
+                        .fixedSize()
                     Text(axis.summary(at: animator.current))
                         .font(.subheadline.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -79,40 +83,127 @@ struct AnimatorPanel: View {
     }
 
     private var controls: some View {
-        HStack(spacing: 12) {
-            AnimatorTransport(animator: animator)
-                .padding(.horizontal, 4)
-                .background(.thinMaterial, in: Capsule())
-
-            Menu {
-                Picker("Playback", selection: $animator.playMode) {
-                    ForEach(CubePlayMode.allCases) { mode in
-                        Label(mode.title, systemImage: mode.symbol).tag(mode)
-                    }
-                }
-            } label: {
-                Image(systemName: animator.playMode.symbol)
-                    .font(.body.weight(.semibold))
-                    .frame(width: 40, height: 36)
-                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .contentShape(Rectangle())
+        // One row when there's room; in a narrow window the frame rate goes underneath.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                transport
+                playModeMenu
+                Spacer(minLength: 8)
+                frameRateLabel
+                frameRate
             }
-            .accessibilityLabel("Playback: \(animator.playMode.title)")
+            VStack(alignment: .leading, spacing: 8) {
+                transport
+                HStack(spacing: 12) {
+                    playModeMenu
+                    Spacer(minLength: 8)
+                    frameRate
+                }
+            }
+        }
+    }
 
-            Spacer(minLength: 8)
+    private var transport: some View {
+        AnimatorTransport(animator: animator)
+            .padding(.horizontal, 4)
+            .background(.thinMaterial, in: Capsule())
+    }
 
-            Text("Frame rate")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+    private var playModeMenu: some View {
+        Menu {
+            Picker("Playback", selection: $animator.playMode) {
+                ForEach(CubePlayMode.allCases) { mode in
+                    Label(mode.title, systemImage: mode.symbol).tag(mode)
+                }
+            }
+        } label: {
+            Image(systemName: animator.playMode.symbol)
+                .font(.body.weight(.semibold))
+                .frame(width: 40, height: 36)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Playback: \(animator.playMode.title)")
+    }
+
+    private var frameRateLabel: some View {
+        Text("Frame rate")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .fixedSize()
+    }
+
+    private var frameRate: some View {
+        HStack(spacing: 12) {
             Text("\(animator.framesPerSecond) fps")
                 .font(.body.monospacedDigit())
                 .frame(minWidth: 52, alignment: .trailing)
             Stepper("Frame rate", value: $animator.framesPerSecond, in: 1...60)
                 .labelsHidden()
         }
+        .fixedSize()
     }
 
+    @ViewBuilder
     private func axisRow(_ axis: Int) -> some View {
+        if compact {
+            compactAxisRow(axis)
+        } else {
+            wideAxisRow(axis)
+        }
+    }
+
+    /// Small window: the axis name and channel on one line, the sliders underneath.
+    private func compactAxisRow(_ axis: Int) -> some View {
+        let info = animator.axes[axis]
+        let index = animator.index(onAxis: axis)
+        let isAnimated = animator.currentAxis?.number == info.number
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                axisNameButton(axis, isAnimated: isAnimated)
+                Spacer(minLength: 4)
+                Text("\(index) / \(info.length - 1)")
+                    .font(.caption.monospacedDigit().weight(.semibold))
+            }
+            Text(info.info(at: index).joined(separator: " · "))
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            ChannelSlider(value: Binding(get: { animator.index(onAxis: axis) },
+                                         set: { animator.setIndex($0, onAxis: axis) }),
+                          count: info.length,
+                          label: info.name)
+            if isAnimated {
+                ChannelRangeSlider(lower: $animator.rangeLower, upper: $animator.rangeUpper, count: info.length)
+            }
+        }
+    }
+
+    /// The axis name (tap it to play along this axis when there's more than one).
+    private func axisNameButton(_ axis: Int, isAnimated: Bool) -> some View {
+        let info = animator.axes[axis]
+        return Button {
+            withAnimation(.snappy) { animator.selectAnimatedAxis(axis) }
+        } label: {
+            HStack(spacing: 8) {
+                if animator.steppableAxes.count > 1 {
+                    Image(systemName: isAnimated ? "largecircle.fill.circle" : "circle")
+                        .foregroundStyle(isAnimated ? Color.accentColor : Color.secondary)
+                }
+                Text(info.name)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(animator.steppableAxes.count <= 1)
+        .accessibilityLabel("Play along \(info.name)")
+    }
+
+    private func wideAxisRow(_ axis: Int) -> some View {
         let info = animator.axes[axis]
         let index = animator.index(onAxis: axis)
         let isAnimated = animator.currentAxis?.number == info.number

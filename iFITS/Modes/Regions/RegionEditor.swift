@@ -39,9 +39,12 @@ struct RegionEditor: View {
                 .accessibilityLabel("Delete \(region.name)")
             }
 
+            // The widest layout that fits: two columns, one column, or (small windows) each
+            // label above its boxes.
             ViewThatFits(in: .horizontal) {
                 wideLayout
                 narrowLayout
+                stackedLayout
             }
         }
     }
@@ -98,6 +101,30 @@ struct RegionEditor: View {
                 label("P.A. (deg)")
                 angleField
             }
+        }
+    }
+
+    /// Small windows: every label above its boxes, one under the other.
+    private var stackedLayout: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            stackedField("Name") { nameField }
+            stackedField("Color") {
+                ScrollView(.horizontal, showsIndicators: false) { colorPicker }
+            }
+            stackedField("Center (px)") { centerPixelFields }
+            stackedField("Center (WCS)") { centerWorldFields(stacked: true) }
+            stackedField(sizeLabel) { sizeColumn }
+            stackedField("P.A. (deg)") { angleField }
+        }
+    }
+
+    private func stackedField<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            content()
         }
     }
 
