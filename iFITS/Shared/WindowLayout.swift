@@ -27,7 +27,12 @@ struct WindowLayout: Equatable {
     }
 
     /// Toolbar buttons (and the V A R S modes) in one » menu.
-    var foldsToolbar: Bool { isCompact }
+    static let foldedToolbarWidth: CGFloat = 1000
+
+    /// Toolbar buttons (and the V A R S modes) in one » menu.
+    var foldsToolbar: Bool {
+        isCompact || (size.width > 0 && size.width < Self.foldedToolbarWidth)
+    }
 
     /// Tallest a bottom dock may be before its content scrolls.
     var dockMaxHeight: CGFloat {

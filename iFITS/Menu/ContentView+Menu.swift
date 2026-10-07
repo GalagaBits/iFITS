@@ -40,6 +40,7 @@ extension ContentView {
                 selectMode("R")
                 regionStore.tool = tool
             },
-            cube: { command in cubeCommand(command) })
+            cube: { command in cubeCommand(command) },
+            showSettings: { showSettings = true})
     }
 }

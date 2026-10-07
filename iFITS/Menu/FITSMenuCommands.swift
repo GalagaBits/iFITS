@@ -20,6 +20,11 @@ struct FITSMenuCommands: Commands {
     private var context: FITSCommandContext? { center.context }
 
     var body: some Commands {
+        // Settings
+        CommandGroup(replacing: .appSettings) {
+            Button("Settings…") { context?.showSettings() }
+                .keyboardShortcut(",", modifiers: .command)
+        }
         // File
         CommandGroup(after: .newItem) {
             Button("Open FITS File…") { context?.openFile() }

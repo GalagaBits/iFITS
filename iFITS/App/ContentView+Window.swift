@@ -16,6 +16,11 @@ extension ContentView {
             .environment(\.compactLayout, windowLayout.isCompact)
             .environment(\.dockMaxHeight, windowLayout.dockMaxHeight)
             .background { layoutReader }
+            // The menu bar acts on whichever iFITS window is in front.
+            .background {
+                KeyWindowObserver { commandCenter.context = commandContext }
+                    .frame(width: 0, height: 0)
+            }
             // FITS files dropped anywhere in the window (from Files, Mail, …).
             .background {
                 FileDropTarget(isEnabled: acceptsDroppedFiles,

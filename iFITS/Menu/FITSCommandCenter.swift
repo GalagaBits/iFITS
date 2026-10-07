@@ -41,11 +41,16 @@ struct FITSCommandContext {
     /// Switches to R mode with a drawing tool (nil = select / move).
     var setRegionTool: (RegionShape?) -> Void
     var cube: (CubeCommand) -> Void
+    var showSettings: () -> Void
 }
 
-/// Shared between the app's menu bar and the main window. The window registers itself
-/// here, so menu items work no matter where keyboard focus is (e.g. while a sheet is open).
+/// Shared between the app's menu bar and the main windows. The frontmost iFITS window registers
+/// itself here whenever it becomes the key window, so menu items act on the window you're using,
+/// no matter where keyboard focus is (e.g. while a sheet is open).
+///
+/// Not @Published on purpose: menu items read `context` when they're used, so switching windows
+/// doesn't make iPadOS rebuild (and flicker) the whole menu bar.
 @MainActor
 final class FITSCommandCenter: ObservableObject {
-    @Published var context: FITSCommandContext?
+    var context: FITSCommandContext?
 }
