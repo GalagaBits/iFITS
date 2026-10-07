@@ -63,7 +63,9 @@ struct SpectrumGraph: View {
     var compact = false
     /// Shown in the middle while there are no values.
     var placeholder: String? = nil
-    var onChannel: (Int) -> Void
+    /// Off for exported pictures: no gestures, no orange channel line.
+    var interactive = true
+    var onChannel: (Int) -> Void = { _ in }
 
     /// Where the trackpad / mouse pointer or a hovering Apple Pencil is (nil = not over the graph).
     @State private var hoverX: CGFloat? = nil
@@ -112,13 +114,15 @@ struct SpectrumGraph: View {
                 }
             }
             .overlay {
-                SpectrumGestureView(
-                    onTap: { point in tapped(at: point, plot) },
-                    onDoubleTap: { _ in doubleTapped() },
-                    onDrag: { phase, start, location in dragged(phase, start: start, location: location, plot) },
-                    onZoom: { phase, anchor, factor in zoomed(phase, anchor: anchor, factor: factor, plot) },
-                    onScroll: { phase, dx in scrolled(phase, dx: dx, plot) },
-                    onHover: { point in hoverX = point?.x })
+                if interactive {
+                    SpectrumGestureView(
+                        onTap: { point in tapped(at: point, plot) },
+                        onDoubleTap: { _ in doubleTapped() },
+                        onDrag: { phase, start, location in dragged(phase, start: start, location: location, plot) },
+                        onZoom: { phase, anchor, factor in zoomed(phase, anchor: anchor, factor: factor, plot) },
+                        onScroll: { phase, dx in scrolled(phase, dx: dx, plot) },
+                        onHover: { point in hoverX = point?.x })
+                }
             }
         }
         .accessibilityElement(children: .ignore)
@@ -279,7 +283,7 @@ struct SpectrumGraph: View {
 
         // The current channel: an orange line with a handle, and a dot on each spectrum.
         let cx = xPosition(Double(current), plot)
-        if cx >= plot.minX - 0.5, cx <= plot.maxX + 0.5 {
+        if interactive, cx >= plot.minX - 0.5, cx <= plot.maxX + 0.5 {
             var line = Path()
             line.move(to: CGPoint(x: cx, y: plot.minY))
             line.addLine(to: CGPoint(x: cx, y: plot.maxY))

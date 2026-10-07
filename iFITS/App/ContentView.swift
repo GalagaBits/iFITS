@@ -188,6 +188,27 @@ struct ContentView: View {
     @State var showCopyExporter = false
     @State var saveMessage: String? = nil
     @State var saveError: String? = nil
+
+    // Undo / redo (annotations and regions, one history for the window) and autosave
+    @State var edits = EditHistory()
+    @Environment(\.undoManager) var undoManager
+    @Environment(\.scenePhase) var scenePhase
+    /// Annotations and regions are saved into the FITS file as you work (Settings).
+    @AppStorage("autosaveEnabled") var autosaveEnabled = true
+    /// `edits.editCount` when the file was last saved (or opened).
+    @State var savedEditCount = 0
+    @State var isSaving = false
+    /// A save asked for while another was running (runs when that one finishes).
+    @State var queuedSave: (() -> Void)? = nil
+    /// Autosave stopped for this file after a problem (reported once); Save tries again.
+    @State var autosaveFailedURL: URL? = nil
+    @State var showSettings = false
+
+    // Sharing and exporting
+    /// Where the FITS share sheet points from (under the toolbar's share button).
+    @State var toolbarSharer = SharePresenter()
+    /// The "Export and Send" sheet (PNG / JPEG of the image).
+    @State var exportRequest: ExportRequest? = nil
     @Environment(\.openWindow) var openWindow
     /// Shared with the menu bar (FITSMenuCommands).
     @EnvironmentObject var commandCenter: FITSCommandCenter
@@ -237,7 +258,8 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            windowLayers
+            // Undo / redo (the window's undo manager, region steps) and autosave.
+            withUndoAndAutosave(windowLayers)
                 .toolbar { astroToolBar }
                 // The file name is the title. Tap it to rename the file (like Pages).
                 .navigationTitle(Binding(get: { fileName.isEmpty ? "iFITS" : fileName },
@@ -307,6 +329,9 @@ struct ContentView: View {
             snrExporterHost
             arHost
             spectraSheetHost
+            settingsHost
+            exportHost
+            shareAnchorLayer
             colorbarLayer
             bottomRightLayer
         }

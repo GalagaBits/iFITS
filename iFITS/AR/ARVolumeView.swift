@@ -18,6 +18,8 @@ struct ARVolumeView: UIViewRepresentable {
     var onRoomFailed: () -> Void
     /// The view can't draw (no Metal, or the shaders are missing from the app).
     var onUnavailable: () -> Void
+    /// Gets pictures of the cube for "Export and Send".
+    var snapshotter: ARSnapshotter? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -30,6 +32,7 @@ struct ARVolumeView: UIViewRepresentable {
             return view
         }
         c.renderer = renderer
+        snapshotter?.renderer = renderer
         hookUp(renderer)
         renderer.setVolume(volume)
         renderer.setAxes(axes)

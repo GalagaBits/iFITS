@@ -203,6 +203,8 @@ struct SpectraDockPanel: View {
     var onChannel: (Int) -> Void
     /// Opens the spectra in their own window.
     var onPopOut: () -> Void
+    /// "Export and Send" a PNG / JPEG of the spectra.
+    var onExport: () -> Void
 
     var body: some View {
         CollapsibleDock(expanded: $model.expanded, glassNamespace: glassNamespace) {
@@ -222,6 +224,16 @@ struct SpectraDockPanel: View {
                         .font(.subheadline)
                         .foregroundStyle(display.isSinglePixel ? .tertiary : .secondary)
                     SpectrumStatisticMenu(model: model, isSinglePixel: display.isSinglePixel)
+                    Button(action: onExport) {
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.body.weight(.semibold))
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .hoverEffect(.highlight)
+                    .disabled(display.lines.isEmpty)
+                    .accessibilityLabel("Export and send the spectra")
                     Button(action: onPopOut) {
                         Image(systemName: "macwindow.badge.plus")
                             .font(.body.weight(.semibold))

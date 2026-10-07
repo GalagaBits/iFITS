@@ -19,6 +19,9 @@ final class RegionStore {
     var statsRegionID: UUID?
     /// Color for new regions (the last color picked).
     var newRegionColor = RegionColor.palette[0].hex
+    /// The regions as of the last undo step (see ContentView+Undo). A change from this is a new
+    /// step; undo and redo set both, so they never record a step of their own.
+    @ObservationIgnored var recordedRegions: [FITSRegion] = []
 
     var selected: FITSRegion? {
         guard let selectedID else { return nil }
@@ -79,6 +82,14 @@ final class RegionStore {
             if r.name.isEmpty { r.name = nextName() }
             regions.append(r)
         }
+    }
+
+    /// Undo / redo: puts back an earlier set of regions.
+    func restore(_ earlier: [FITSRegion]) {
+        recordedRegions = earlier
+        regions = earlier
+        if let id = selectedID, region(id) == nil { selectedID = nil }
+        if let id = statsRegionID, region(id) == nil { statsRegionID = nil }
     }
 
     func removeAll() {

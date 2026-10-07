@@ -13,11 +13,30 @@ extension ContentView {
 
     /// Default save ("Save", ⌘S): writes the annotations (APPLE_PENCIL_ANNOTATIONS) and regions
     /// (DS9_REGIONS) into the currently loaded FITS file, replacing any earlier ones.
-    func saveToOriginal() {
+    /// - silent: autosave. No "Saved" message, and a problem is reported once per file.
+    func saveToOriginal(silent: Bool = false) {
         guard let url = loadedFileURL else { return }
+        // What to save is taken now, so a save that has to wait still saves this file's edits.
+        let editsSaved = edits.editCount
         let drawing = annotations.drawingData()
         let regionLines = DS9Regions.fitsLines(regionStore.regions)
         let name = fileName
+        let save = {
+            performSave(url: url, drawing: drawing, regionLines: regionLines, name: name,
+                        editsSaved: editsSaved, silent: silent)
+        }
+        // One save at a time; the newest one asked for meanwhile runs right after.
+        if isSaving {
+            queuedSave = save
+        } else {
+            save()
+        }
+    }
+
+    /// Writes the annotations and regions into `url` (off the main thread).
+    private func performSave(url: URL, drawing: Data?, regionLines: [String], name: String,
+                             editsSaved: Int, silent: Bool) {
+        isSaving = true
         DispatchQueue.global(qos: .userInitiated).async {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
@@ -41,15 +60,33 @@ extension ContentView {
             let error = failure ?? coordinatorError
             let didChange = changed
             DispatchQueue.main.async {
+                isSaving = false
                 if let error {
-                    saveError = error.localizedDescription
-                } else if !didChange {
-                    showSaveMessage("Nothing new to save")
+                    if !silent || autosaveFailedURL != url {
+                        saveError = (silent ? "Autosave couldn't save \(name): " : "") + error.localizedDescription
+                    }
+                    if silent { autosaveFailedURL = url }
                 } else {
-                    showSaveMessage("Saved \(name)")
+                    // Only if the same file is still open (another one may have been opened since).
+                    if loadedFileURL == url { savedEditCount = editsSaved }
+                    if autosaveFailedURL == url { autosaveFailedURL = nil }
+                    if !silent { showSaveMessage(didChange ? "Saved \(name)" : "Nothing new to save") }
+                }
+                if let next = queuedSave {
+                    queuedSave = nil
+                    next()
                 }
             }
         }
+    }
+
+    /// Edits since the last save (annotations and regions).
+    var hasUnsavedEdits: Bool { edits.editCount != savedEditCount }
+
+    /// Autosave: saves now if autosave is on and something changed.
+    func autosaveNow() {
+        guard autosaveEnabled, hasUnsavedEdits, let url = loadedFileURL, autosaveFailedURL != url else { return }
+        saveToOriginal(silent: true)
     }
 
     /// "Save as Copy…" (⇧⌘S): a copy of the loaded FITS file with the annotations and regions
@@ -189,6 +226,8 @@ extension ContentView {
     /// keepView: keep the zoom, position and cube channel (used when the "_SNR_" file replaces the
     /// image it was made from); a problem then shows as an alert and the current image stays.
     func loadFITSFile(url: URL, hdu: Int? = nil, keepView: Bool = false) {
+        // Save the open file's edits before it's replaced.
+        autosaveNow()
         isLoading = true
         errorMessage = nil
 
@@ -289,6 +328,8 @@ extension ContentView {
                             self.animator.setIndex(index, onAxis: axis)
                         }
                     }
+                    // Nothing to undo in the new file, and nothing unsaved.
+                    self.resetHistory()
                     // Spectra belong to the previous image too.
                     self.spectrum.imageChanged()
                     if cube == nil {

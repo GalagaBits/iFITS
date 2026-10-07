@@ -585,3 +585,75 @@ extension ARVolumeRenderer: @preconcurrency ARSessionDelegate {
         onRoomFailed?()
     }
 }
+
+// MARK: - Picture for "Export and Send"
+
+extension ARVolumeRenderer {
+    /// The cube exactly as it's shown now (same turn, tilt and zoom), on a white background,
+    /// without the grid or the camera picture. About `longSide` pixels on the long side.
+    func snapshot(longSide: CGFloat = 3000) -> UIImage? {
+        guard let view, let settings, let volumeTexture, let colormapTexture else { return nil }
+        let bounds = view.bounds.size
+        guard bounds.width > 0, bounds.height > 0 else { return nil }
+        let k = longSide / max(bounds.width, bounds.height)
+        let w = max(1, Int(bounds.width * k)), h = max(1, Int(bounds.height * k))
+
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: w, height: h,
+                                                                  mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .shared
+        guard let target = device.makeTexture(descriptor: descriptor),
+              let commandBuffer = queue.makeCommandBuffer() else { return nil }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].storeAction = .store
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 1, green: 1, blue: 1, alpha: 1)
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return nil }
+
+        let frame = inRoom ? session.currentFrame : nil
+        if !inRoom || placement != nil {
+            let (projection, viewMatrix) = cameraMatrices(size: bounds, frame: frame)
+            let mvp = projection * viewMatrix * modelMatrix()
+            var u = ARVolumeUniforms(
+                inverseMVP: mvp.inverse,
+                boxMin: SIMD4(-boxSize / 2, 0),
+                boxSize: SIMD4(boxSize, boxSize.max()),
+                params: SIMD4(Float(settings.lo), Float(settings.hi), settings.density, 0),
+                dims: SIMD4(UInt32(dims.x), UInt32(dims.y), UInt32(dims.z), UInt32(dims.x + dims.y + dims.z + 4)))
+            encoder.setRenderPipelineState(volumePipeline)
+            encoder.setFragmentBytes(&u, length: MemoryLayout<ARVolumeUniforms>.stride, index: 0)
+            encoder.setFragmentTexture(volumeTexture, index: 0)
+            encoder.setFragmentTexture(colormapTexture, index: 1)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        }
+        encoder.endEncoding()
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        // The picture is BGRA, already composited over white.
+        let bytesPerRow = w * 4
+        var pixels = [UInt8](repeating: 255, count: bytesPerRow * h)
+        pixels.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            target.getBytes(base, bytesPerRow: bytesPerRow, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let image = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32,
+                                  bytesPerRow: bytesPerRow, space: space,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Little.rawValue
+                                                           | CGImageAlphaInfo.noneSkipFirst.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: false,
+                                  intent: .defaultIntent) else { return nil }
+        return UIImage(cgImage: image)
+    }
+}
+
+/// Lets the AR screen ask the renderer for a picture (set by ARVolumeView).
+@MainActor
+final class ARSnapshotter {
+    weak var renderer: ARVolumeRenderer?
+
+    func image() -> UIImage? { renderer?.snapshot() }
+}

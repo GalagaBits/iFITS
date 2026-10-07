@@ -12,6 +12,9 @@ import SwiftUI
 struct ARModeView: View {
     @State private var model: ARModel
     @State private var colorbarExpanded = true
+    @State private var snapshotter = ARSnapshotter()
+    /// The "Export and Send" sheet (a picture of the cube as shown).
+    @State private var exportRequest: ExportRequest?
     var onClose: () -> Void
 
     init(source: ARSource, onClose: @escaping () -> Void) {
@@ -34,7 +37,8 @@ struct ARModeView: View {
                              onRoomFailed: { model.inRoom = false },
                              onUnavailable: {
                                  model.failure = "3-D drawing isn't available. Check that ARShaders.metal is part of the iFITS target."
-                             })
+                             },
+                             snapshotter: snapshotter)
                     .ignoresSafeArea()
                 ARLabelLayer(model: model)
             } else if model.failure == nil {
@@ -60,35 +64,38 @@ struct ARModeView: View {
         }
         .preferredColorScheme(.dark)
         .task { await model.load() }
+        .sheet(item: $exportRequest) { request in
+            ExportSheet(request: request, onClose: { exportRequest = nil })
+                .presentationSizing(.form)
+        }
     }
 
     // MARK: Controls
 
     private var controls: some View {
         VStack(spacing: 0) {
-            // Top: back (left); title (middle); camera and options (right).
-            HStack(alignment: .top, spacing: 14) {
-                circleButton(systemImage: "chevron.left", label: "Back to the image", action: onClose)
-                Spacer()
-                VStack(spacing: 2) {
-                    Text(model.source.fileName)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text(model.inRoom ? "In the room" : "3-D cube")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+            // Top: back (left); camera, share and options (right); the title centred on the screen.
+            // The title sits in its own layer, so the buttons on either side can't push it off-centre.
+            ZStack(alignment: .top) {
+                HStack(alignment: .top, spacing: 14) {
+                    circleButton(systemImage: "chevron.left", label: "Back to the image", action: onClose)
+                    Spacer()
+                    circleButton(systemImage: "arkit", label: model.inRoom ? "Leave the room" : "Place the cube in the room",
+                                 highlighted: model.inRoom) {
+                        model.status = nil
+                        model.inRoom.toggle()
+                    }
+                    .disabled(model.volume == nil)
+                    circleButton(systemImage: "square.and.arrow.up", label: "Export and send a picture of the cube") {
+                        exportPicture()
+                    }
+                    .disabled(model.volume == nil)
+                    optionsMenu
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .glassEffect(.regular, in: Capsule())
-                Spacer()
-                circleButton(systemImage: "arkit", label: model.inRoom ? "Leave the room" : "Place the cube in the room",
-                             highlighted: model.inRoom) {
-                    model.status = nil
-                    model.inRoom.toggle()
-                }
-                .disabled(model.volume == nil)
-                optionsMenu
+                title
+                    // Same space kept clear on both sides (wider than the three buttons on the right),
+                    // so a long file name shortens instead of running under the buttons.
+                    .padding(.horizontal, 220)
             }
             .padding(.horizontal, 24)
             .padding(.top, 12)
@@ -118,6 +125,22 @@ struct ARModeView: View {
         }
     }
 
+    /// File name and what's shown, in a glass capsule.
+    private var title: some View {
+        VStack(spacing: 2) {
+            Text(model.source.fileName)
+                .font(.headline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text(model.inRoom ? "In the room" : "3-D cube")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .glassEffect(.regular, in: Capsule())
+    }
+
     /// Same look as the V A R S buttons: a glass circle, orange while on.
     private var gridButton: some View {
         Button {
@@ -140,6 +163,15 @@ struct ARModeView: View {
         .buttonStyle(.plain)
         .disabled(model.volume == nil)
         .accessibilityLabel(model.showGrid ? "Hide the 3-D grid" : "Show the 3-D grid")
+    }
+
+    /// "Export and Send" the cube as it's turned now, on white.
+    private func exportPicture() {
+        let base = (model.source.fileName as NSString).deletingPathExtension
+        let snapshotter = self.snapshotter
+        exportRequest = ExportRequest(title: "Export 3-D View", baseName: base + " 3D") {
+            snapshotter.image()
+        }
     }
 
     private var optionsMenu: some View {
@@ -179,6 +211,7 @@ struct ARModeView: View {
         } label: {
             Image(systemName: "ellipsis")
                 .font(.title2.weight(.semibold))
+                .foregroundStyle(Color.primary)
                 .frame(width: 56, height: 56)
                 .contentShape(Circle())
                 .glassEffect(.regular.interactive(), in: Circle())

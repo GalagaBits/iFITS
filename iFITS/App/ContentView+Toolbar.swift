@@ -80,35 +80,43 @@ extension ContentView {
         ToolbarSpacer(.fixed, placement: .topBarTrailing)
 
         ToolbarItemGroup(placement: .topBarTrailing) {
-            Button { annotations.undoLast() } label: {
-                Image(systemName: "arrow.uturn.backward")
-            }
-            .disabled(!annotations.canUndo)
-            .accessibilityLabel("Undo")
+            // Undo the last edit (annotation or region); hold or right-click for Undo / Redo.
+            undoButton
 
-            Button {} label: { Image(systemName: "square.and.arrow.up") }
+            // Share the FITS file; the share sheet also has "Export and Send…" (PNG / JPEG).
+            Button { shareFITS() } label: { Image(systemName: "square.and.arrow.up") }
+                .disabled(loadedFileURL == nil)
                 .accessibilityLabel("Share")
 
             Menu {
                 // Save = annotations and regions into the loaded FITS file.
-                Button { saveToOriginal() } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
+                Group {
+                    Button { saveToOriginal() } label: {
+                        Label("Save", systemImage: "square.and.arrow.down")
+                    }
+                    Button { saveCopy() } label: {
+                        Label("Save as Copy…", systemImage: "doc.on.doc")
+                    }
+                    Button { exportImage() } label: {
+                        Label("Export and Send…", systemImage: "photo.badge.arrow.down")
+                    }
+                    Divider()
+                    Button { importRegions() } label: {
+                        Label("Import Regions (.reg)…", systemImage: "square.and.arrow.down.on.square")
+                    }
+                    Button { exportRegions() } label: {
+                        Label("Export Regions (.reg)…", systemImage: "square.and.arrow.up.on.square")
+                    }
+                    .disabled(regionStore.regions.isEmpty)
                 }
-                Button { saveCopy() } label: {
-                    Label("Save as Copy…", systemImage: "doc.on.doc")
-                }
+                .disabled(loadedFileURL == nil)
                 Divider()
-                Button { importRegions() } label: {
-                    Label("Import Regions (.reg)…", systemImage: "square.and.arrow.down.on.square")
+                Button { showSettings = true } label: {
+                    Label("Settings", systemImage: "gearshape")
                 }
-                Button { exportRegions() } label: {
-                    Label("Export Regions (.reg)…", systemImage: "square.and.arrow.up.on.square")
-                }
-                .disabled(regionStore.regions.isEmpty)
             } label: {
                 Image(systemName: "ellipsis")
             }
-            .disabled(loadedFileURL == nil)
             .accessibilityLabel("More")
         }
     }

@@ -22,29 +22,28 @@ import PencilKit
 // • Capturing at 1× keeps pen widths sensible at every zoom (PencilKit clamps tool widths, so a
 //   zoomed canvas would make strokes drawn while zoomed-in enormous).
 
-/// The undo manager the capture canvas reports (so ⌘Z and the Edit menu work).
+/// The undo manager the capture canvas reports while drawing (A mode), so ⌘Z, the Edit menu,
+/// the three-finger swipes and the tool palette's undo buttons work there.
 /// PencilKit records its own capture-canvas steps into it, but those are never used:
-/// undo / redo / canUndo / canRedo all go to `history`, which holds only annotation steps.
-/// No enable/disable counting, so nothing can get out of balance.
+/// undo / redo / canUndo / canRedo all go to `target`, the window's undo manager, which holds
+/// the app's real steps (annotations and regions; see EditHistory).
 final class AnnotationUndoManager: UndoManager {
-    /// The real annotation undo stack.
-    let history = UndoManager()
+    /// The window's undo manager (set by ContentView).
+    var target = UndoManager()
 
     override init() {
         super.init()
         levelsOfUndo = 1          // keep PencilKit's ignored steps from piling up
     }
 
-    override var canUndo: Bool { history.canUndo }
-    override var canRedo: Bool { history.canRedo }
-    override var undoActionName: String { history.undoActionName }
-    override var redoActionName: String { history.redoActionName }
-    override func undo() { history.undo() }
-    override func redo() { history.redo() }
-    override func removeAllActions() {
-        super.removeAllActions()
-        history.removeAllActions()
-    }
+    override var canUndo: Bool { target.canUndo }
+    override var canRedo: Bool { target.canRedo }
+    override var undoActionName: String { target.undoActionName }
+    override var redoActionName: String { target.redoActionName }
+    override var undoMenuItemTitle: String { target.undoMenuItemTitle }
+    override var redoMenuItemTitle: String { target.redoMenuItemTitle }
+    override func undo() { target.undo() }
+    override func redo() { target.redo() }
 }
 
 /// Capture canvas whose undo goes to the annotation undo stack.
@@ -64,8 +63,10 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
     private(set) var strokes: [PKStroke] = [] {
         didSet { applyDisplayDrawing() }
     }
-    var canUndo = false
-    var canRedo = false
+    /// The window's undo history (annotation steps are recorded there; see EditHistory).
+    @ObservationIgnored weak var history: EditHistory?
+    var canUndo: Bool { history?.canUndo ?? false }
+    var canRedo: Bool { history?.canRedo ?? false }
     var hasStrokes: Bool { !strokes.isEmpty }
     /// Show or hide all annotations (in every mode).
     var isVisible = true
@@ -88,13 +89,12 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
         }
     }
 
-    /// Annotation undo (see AnnotationUndoManager): our steps live in `undo.history`.
+    /// What the capture canvas reports as its undo manager (see AnnotationUndoManager).
     let undo = AnnotationUndoManager()
     @ObservationIgnored private var isActive = false
     @ObservationIgnored private var isClearingCapture = false
     @ObservationIgnored private var eraseSnapshot: [PKStroke]?
     @ObservationIgnored private var eraserGesture: UILongPressGestureRecognizer?
-    @ObservationIgnored private var undoObservers: [NSObjectProtocol] = []
 
     // Capture → display hand-off
     @ObservationIgnored private var handedOffCount = 0
@@ -183,14 +183,6 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
         canvas.addGestureRecognizer(eraser)
         eraserGesture = eraser
         applyInputPolicy()
-
-        for name in [Notification.Name.NSUndoManagerDidUndoChange,
-                     .NSUndoManagerDidRedoChange,
-                     .NSUndoManagerDidCloseUndoGroup] {
-            undoObservers.append(NotificationCenter.default.addObserver(forName: name, object: undo.history, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refreshUndoState() }
-            })
-        }
     }
 
     // MARK: Capture → image space
@@ -218,7 +210,7 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
             return s
         }
         handedOffCount = captured.count
-        setStrokes(strokes + converted)
+        setStrokes(strokes + converted, action: "Annotation")
         // Leave the fresh stroke on the capture layer for a moment while the display
         // canvas renders it, so there's no flicker; then clear it.
         scheduleCaptureClear()
@@ -283,36 +275,36 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
 
     // MARK: Editing (all undoable)
 
-    private func setStrokes(_ newStrokes: [PKStroke]) {
+    /// Makes a change to the strokes and records it in the window's undo history.
+    private func setStrokes(_ newStrokes: [PKStroke], action: String) {
         let old = strokes
         strokes = newStrokes
-        undo.history.registerUndo(withTarget: self) { model in
-            MainActor.assumeIsolated { model.setStrokes(old) }
-        }
-        refreshUndoState()
+        history?.record(action,
+                        undo: { [weak self] in self?.applyStrokes(old) },
+                        redo: { [weak self] in self?.applyStrokes(newStrokes) })
     }
 
-    private func refreshUndoState() {
-        canUndo = undo.canUndo
-        canRedo = undo.canRedo
+    /// Undo / redo of an annotation step.
+    private func applyStrokes(_ newStrokes: [PKStroke]) {
+        clearCaptureIfIdle()
+        strokes = newStrokes
     }
 
+    /// Undoes the most recent edit (annotation or region): the window's single history.
     func undoLast() {
         clearCaptureIfIdle()
-        if undo.canUndo { undo.undo() }
-        refreshUndoState()
+        history?.undo()
     }
 
     func redoLast() {
         clearCaptureIfIdle()
-        if undo.canRedo { undo.redo() }
-        refreshUndoState()
+        history?.redo()
     }
 
     /// Clears everything (undoable with Undo / ⌘Z).
     func clear() {
         clearCaptureIfIdle()
-        setStrokes([])
+        setStrokes([], action: "Clear Annotations")
     }
 
     /// The annotations as PencilKit data (image-pixel coordinates), or nil if there are none.
@@ -324,7 +316,6 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
     func restore(_ restored: [PKStroke]) {
         strokes = restored
         undo.removeAllActions()
-        refreshUndoState()
     }
 
     /// Wipes annotations and their undo history (used when a new file is opened).
@@ -336,7 +327,6 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
         isClearingCapture = false
         handedOffCount = 0
         undo.removeAllActions()
-        refreshUndoState()
     }
 
     // MARK: Eraser
@@ -362,7 +352,7 @@ final class AnnotationModel: NSObject, PKCanvasViewDelegate, UIGestureRecognizer
             if let before = eraseSnapshot, before.count != strokes.count {
                 let after = strokes
                 strokes = before
-                setStrokes(after)       // one undo step per eraser swipe
+                setStrokes(after, action: "Erase")       // one undo step per eraser swipe
             }
             eraseSnapshot = nil
         default:

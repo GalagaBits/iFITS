@@ -191,7 +191,8 @@ extension ContentView {
                              regions: regionStore.statsCandidates,
                              glassNamespace: dockNamespace,
                              onChannel: { setSpectrumChannel($0) },
-                             onPopOut: { openSpectraWindow() })
+                             onPopOut: { openSpectraWindow() },
+                             onExport: { exportSpectra() })
         }
     }
 
@@ -204,6 +205,16 @@ extension ContentView {
                         onChannel: { setSpectrumChannel($0) },
                         onClose: { withAnimation(.snappy) { spectrum.showBox = false } })
                 .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .topTrailing)))
+        }
+    }
+
+    /// "Export and Send" the spectra as shown (PNG / JPEG, white background).
+    func exportSpectra() {
+        guard let display = spectrumDisplay, !display.lines.isEmpty else { return }
+        let name = fileName
+        let zoom = spectrum.zoom
+        exportRequest = ExportRequest(title: "Export Spectra", baseName: SpectrumExport.baseName(fileName: name)) {
+            SpectrumExport.render(display: display, fileName: name, zoom: zoom)
         }
     }
 

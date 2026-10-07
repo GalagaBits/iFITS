@@ -98,6 +98,9 @@ private struct SpectraWindowContent: View {
     @Bindable var model: SpectrumModel
     let display: SpectrumDisplay
 
+    /// The "Export and Send" sheet for this window.
+    @State private var exportRequest: ExportRequest?
+
     private var current: Int { link.current ?? display.current }
 
     var body: some View {
@@ -130,6 +133,20 @@ private struct SpectraWindowContent: View {
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 16)
+        .sheet(item: $exportRequest) { request in
+            ExportSheet(request: request, onClose: { exportRequest = nil })
+                .presentationSizing(.form)
+        }
+    }
+
+    /// "Export and Send" the spectra as shown here.
+    private func export() {
+        let name = link.fileName
+        let zoom = model.zoom
+        let shown = display
+        exportRequest = ExportRequest(title: "Export Spectra", baseName: SpectrumExport.baseName(fileName: name)) {
+            SpectrumExport.render(display: shown, fileName: name, zoom: zoom)
+        }
     }
 
     @ViewBuilder
@@ -155,5 +172,12 @@ private struct SpectraWindowContent: View {
                 .font(.subheadline)
         }
         .disabled(model.zoom == nil)
+        Button {
+            export()
+        } label: {
+            Label("Export and Send", systemImage: "square.and.arrow.up")
+                .font(.subheadline)
+        }
+        .disabled(display.lines.isEmpty)
     }
 }
