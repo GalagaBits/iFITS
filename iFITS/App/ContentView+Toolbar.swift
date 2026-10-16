@@ -12,6 +12,12 @@ import SwiftUI
 extension ContentView {
     @ToolbarContentBuilder
     var astroToolBar: some ToolbarContent {
+        // The FITS catalog: browse public FITS files, download them, open them here.
+        ToolbarItem(placement: .topBarLeading) {
+            Button { showCatalog = true } label: { Image(systemName: "books.vertical") }
+                .accessibilityLabel("Catalog")
+        }
+
         ToolbarItem(placement: .topBarLeading) {
             if windowLayout.foldsToolbar {
                 // A folder icon leaves more room for the file name.

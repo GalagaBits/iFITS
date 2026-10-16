@@ -82,6 +82,13 @@ struct ContentView: View {
     @State var regionDrag: RegionDrag? = nil
     @State var regionPanelExpanded = true
 
+    // FITS catalog (Catalog/). The catalog button in the toolbar opens it over the viewer.
+    /// The catalog's data. Kept here, so it's only downloaded again when you reopen the catalog.
+    @State var catalog = CatalogStore()
+    @State var showCatalog = false
+    /// A downloaded catalog file to open once the catalog has closed.
+    @State var catalogFileToOpen: URL? = nil
+
     // Statistics (S mode)
     /// The top-right statistics box. Closable; tapping S (even when already in S) shows it again.
     @State var showStatsBox = false
@@ -313,6 +320,24 @@ struct ContentView: View {
                 .toolbarColorScheme(.dark, for: .navigationBar)
                 .sheet(item: $headerSheetDocument) { document in
                     HeaderWindowView(document: document, onClose: { headerSheetDocument = nil })
+                }
+                // The FITS catalog, over the whole window (Catalog/CatalogViews.swift). Its back
+                // button closes it; "Open" on a downloaded file closes it and opens that file.
+                .fullScreenCover(isPresented: $showCatalog, onDismiss: {
+                    // Open the file only after the catalog has finished closing, so the
+                    // "Save changes?" question (if any) can appear.
+                    if let url = catalogFileToOpen {
+                        catalogFileToOpen = nil
+                        prepareToOpen(url: url)
+                    }
+                    restoreImageFocus()
+                }) {
+                    CatalogScreen(store: catalog,
+                                  onClose: { showCatalog = false },
+                                  onOpen: { url in
+                                      catalogFileToOpen = url
+                                      showCatalog = false
+                                  })
                 }
                 // SwiftUI's own file picker (FITS files, noise files, or .reg region files), which hands focus
                 // back to the app when it closes.
