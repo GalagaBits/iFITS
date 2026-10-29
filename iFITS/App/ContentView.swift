@@ -56,6 +56,9 @@ struct ContentView: View {
     @State var clipSelection: ClipSelection = .percentile(99.9)
     @State var imageStats: ImageStats? = nil
     @State var renderer = FITSRenderer()
+    /// Draws the image on the GPU (Metal), so Visualization changes are instant on large images.
+    /// When it can't (no Metal, or the image doesn't fit in GPU memory), `renderer` draws instead.
+    @State var gpuImage = MetalImageRenderer()
     @State var panelStage: PanelStage = .full
     @State var panelHeight: CGFloat = 0
 
@@ -383,7 +386,13 @@ struct ContentView: View {
             dropHighlight
         })
         .onChange(of: renderSettings) { _, newSettings in
-            renderer.request(newSettings)
+            // The GPU view recolours the image itself (MetalImageView reads renderSettings), so the
+            // CPU only redraws the whole picture when the GPU view isn't in use.
+            if !gpuImage.isReady { renderer.request(newSettings) }
+        }
+        // The GPU view gave up (e.g. out of GPU memory): bring the CPU picture up to date.
+        .onChange(of: gpuImage.isReady) { _, ready in
+            if !ready, fitsImage != nil { renderer.refresh(renderSettings) }
         }
         .onAppear {
             renderer.onImage = { image in
@@ -531,19 +540,35 @@ struct ContentView: View {
         }
     }
 
+    /// The image itself: drawn by the GPU (MetalImageView, which does the zoom and pan in its shader
+    /// with the same transform as the overlays), or the CPU-made picture scaled by SwiftUI.
+    @ViewBuilder
+    func imageLayer(_ uiImage: UIImage, size: CGSize) -> some View {
+        if gpuImage.isReady {
+            MetalImageView(renderer: gpuImage,
+                           settings: renderSettings,
+                           transform: imageToScreenTransform(in: size),
+                           revision: gpuImage.revision)
+                .frame(width: size.width, height: size.height)
+                .allowsHitTesting(false)
+        } else {
+            Image(uiImage: uiImage)
+                .resizable()
+                .interpolation(.none)
+                .aspectRatio(contentMode: .fill)
+            // Pin the content to exactly the viewport size so its center
+            // (the scaleEffect anchor) is the same as the viewport's center.
+            .frame(width: size.width, height: size.height)
+            .scaleEffect(scale)
+            .offset(offset)
+            .frame(width: size.width, height: size.height)
+            .clipped()
+        }
+    }
+
     /// The image with its overlays: grid, gestures, inspected pixel, annotations, regions.
     func imageCanvas(_ uiImage: UIImage, size: CGSize) -> some View {
-        Image(uiImage: uiImage)
-            .resizable()
-            .interpolation(.none)
-            .aspectRatio(contentMode: .fill)
-        // Pin the content to exactly the viewport size so its center
-        // (the scaleEffect anchor) is the same as the viewport's center.
-        .frame(width: size.width, height: size.height)
-        .scaleEffect(scale)
-        .offset(offset)
-        .frame(width: size.width, height: size.height)
-        .clipped()
+        imageLayer(uiImage, size: size)
         // The grid is drawn on top at screen resolution (not scaled
         // with the image), so lines stay sharp and text stays one size.
         .overlay {

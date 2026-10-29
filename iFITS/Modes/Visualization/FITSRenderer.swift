@@ -75,13 +75,21 @@ final class FITSRenderer {
         }
     }
 
-    nonisolated static func render(_ data: [Float], width: Int, height: Int, settings s: RenderSettings) -> UIImage? {
-        let count = width * height
-        guard count > 0, data.count >= count else { return nil }
+    /// Draws the image again with `settings` even if they're the ones last asked for (used when
+    /// the GPU view stops drawing and the CPU picture may be out of date).
+    func refresh(_ settings: RenderSettings) {
+        lastRequested = nil
+        request(settings)
+    }
 
-        // Fold scaling + colormap into one 4096-entry table indexed by the linear clip position.
+    /// Entries in the colour table (scaling + colormap folded together).
+    nonisolated static let tableSize = 4096
+
+    /// Scaling + colormap folded into one table, indexed by the linear position between Clip min
+    /// (entry 0) and Clip max (the last entry). Packed for an RGBA8 bitmap (bytes R, G, B, A).
+    /// Used here and by the GPU renderer (MetalImageRenderer), so both give the same colours.
+    nonisolated static func colorTable(for s: RenderSettings) -> [UInt32] {
         let colors = s.colormap.lut(inverted: s.inverted)
-        let tableSize = 4096
         var table = [UInt32](repeating: 0, count: tableSize)
         for i in 0..<tableSize {
             let x = Double(i) / Double(tableSize - 1)
@@ -89,6 +97,16 @@ final class FITSRenderer {
             let yc = y.isFinite ? min(1, max(0, y)) : 0
             table[i] = colors[Int((yc * 255).rounded())]
         }
+        return table
+    }
+
+    nonisolated static func render(_ data: [Float], width: Int, height: Int, settings s: RenderSettings) -> UIImage? {
+        let count = width * height
+        guard count > 0, data.count >= count else { return nil }
+
+        // Fold scaling + colormap into one 4096-entry table indexed by the linear clip position.
+        let table = colorTable(for: s)
+        let tableSize = FITSRenderer.tableSize
 
         let lo = Float(s.clipMin), hi = Float(s.clipMax)
         let span = hi - lo

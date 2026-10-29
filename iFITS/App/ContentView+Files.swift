@@ -371,6 +371,8 @@ extension ContentView {
                 DispatchQueue.main.async {
                     self.renderer.load(pixels, width: result.width, height: result.height,
                                        renderedWith: settings)
+                    // Send the pixels to the GPU once; from now on settings changes are drawn there.
+                    self.gpuImage.load(pixels: pixels, width: result.width, height: result.height)
                     self.imageStats = stats
                     self.clipSelection = .percentile(percentile)
                     self.renderSettings = settings

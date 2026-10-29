@@ -121,6 +121,8 @@ nonisolated struct CubePlaneRequest: Sendable {
     let settings: RenderSettings
     /// Clip percentile to apply to this plane (nil = keep the manual clip).
     let percentile: Double?
+    /// Also colour the plane on the CPU (not needed while the GPU view draws the image).
+    var drawImage = true
 }
 
 nonisolated struct CubePlaneResult: @unchecked Sendable {
@@ -178,7 +180,9 @@ final class CubePlaneLoader {
         if let p = request.percentile {
             (settings.clipMin, settings.clipMax) = stats.clipRange(percentile: p)
         }
-        let image = FITSRenderer.render(pixels, width: source.width, height: source.height, settings: settings)
+        let image = request.drawImage
+            ? FITSRenderer.render(pixels, width: source.width, height: source.height, settings: settings)
+            : nil
         return CubePlaneResult(plane: request.plane, pixels: pixels, stats: stats, settings: settings, image: image)
     }
 }

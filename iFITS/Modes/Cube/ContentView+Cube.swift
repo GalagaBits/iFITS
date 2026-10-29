@@ -31,8 +31,9 @@ extension ContentView {
         requestedPlane = plane
         var percentile: Double? = nil
         if case .percentile(let p) = clipSelection { percentile = p }
+        // With the GPU view, the plane loader skips drawing a CPU picture (the GPU colours it).
         planeLoader.request(CubePlaneRequest(source: cube, plane: plane, settings: renderSettings,
-                                             percentile: percentile))
+                                             percentile: percentile, drawImage: !gpuImage.isReady))
     }
 
     /// A new plane is ready: show it. With a clip percentile, each channel gets its own clip
@@ -45,13 +46,17 @@ extension ContentView {
             (settings.clipMin, settings.clipMax) = result.stats.clipRange(percentile: p)
         }
         renderer.load(result.pixels, width: cube.width, height: cube.height, renderedWith: result.settings)
+        // The new channel's pixels go to the GPU (one upload per channel).
+        gpuImage.load(pixels: result.pixels, width: cube.width, height: cube.height)
         imageStats = result.stats
         if let image = result.image { fitsImage = image }
         imageGeneration += 1          // statistics follow the channel
         if settings != renderSettings {
-            renderSettings = settings  // re-renders through onChange if anything else changed
-        } else if settings != result.settings {
-            renderer.request(settings)
+            renderSettings = settings  // the GPU view redraws; without it, onChange re-renders
+        }
+        // Without the GPU view: draw the CPU picture if it wasn't drawn, or drawn with other settings.
+        if !gpuImage.isReady, result.image == nil || settings != result.settings {
+            renderer.refresh(settings)
         }
     }
 

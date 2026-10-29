@@ -54,7 +54,14 @@ extension ContentView {
     /// The image at full resolution (at least 2048 pixels on the long side; pixels stay sharp),
     /// with annotations and regions, on a white background.
     func renderExportImage() -> UIImage? {
-        guard let image = fitsImage, imageWidth > 0, imageHeight > 0 else { return nil }
+        guard let shown = fitsImage, imageWidth > 0, imageHeight > 0 else { return nil }
+        // With the GPU view, `fitsImage` may have been drawn with earlier settings (the GPU recolours
+        // the screen without making a new picture), so draw one with the current settings.
+        let pixels = renderer.pixelData
+        let image = gpuImage.isReady
+            ? (FITSRenderer.render(pixels.pixels, width: pixels.width, height: pixels.height,
+                                   settings: renderSettings) ?? shown)
+            : shown
         let w = imageWidth, h = imageHeight
         // Points across the long side, and the pixel scale on top of that.
         let points: CGFloat = 1024
