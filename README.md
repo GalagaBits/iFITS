@@ -56,13 +56,33 @@ https://github.com/user-attachments/assets/0e92dcba-f78c-4100-bbf4-0c169a46b8a3
 
 4. **Regions and statistics (R, S).** Draw an ellipse, rectangle, line or point, then see its statistics in **S** mode. Regions can be imported and exported as DS9 `.reg` files.
 
+
+https://github.com/user-attachments/assets/e22c3bc6-2e52-4e2d-bbf4-54d4b5a7e2d1
+
+
 5. **FITS header.** Tap **H** to see every keyword and value.
+
+
+https://github.com/user-attachments/assets/efb23d9e-d74e-4ea9-8f43-2abe0dccadc2
+
 
 6. **Data cubes.** For a cube, tap the cube button to play or step through the channels.
 
+
+https://github.com/user-attachments/assets/3424cfbf-b460-4774-b983-d7eaedefe14a
+
+
 7. **Spectra.** Tap the spectrum button, then hover over or double-tap a pixel, or pick a region, to see its spectrum.
 
+
+https://github.com/user-attachments/assets/ed2d7d5e-7b57-461f-b1b7-11944340f914
+
+
 8. **3D view and AR.** Tap the AR button to rotate the cube in 3D, then tap **Place the cube in the room** to see it through the camera.
+
+
+https://github.com/user-attachments/assets/ec0a6767-5a6a-4f4e-8134-5436498c5f72
+
 
 
 Annotations and regions save automatically (turn off **Autosave** in **••• › Settings**). Use the share button to send the FITS file, or **Export and Send…** for a PNG or JPEG.
