@@ -40,7 +40,7 @@ This section is still a work in progress. Currently, users can download this rep
 
 **[See the full quick start with videos →](https://galagabits.github.io/iFITS/)**
 
-1. **Open a FITS file.** Tap **Open File** at the top left, or in the Files app touch and hold a `.fits` file and choose **Open With › iFITS**. You can also drag a file onto the iFITS window. Pinch to zoom, drag to move, and tap ↺ to reset the view.
+1. **Open a FITS file.** Tap **Open File** at the top left, or in the Files app touch and hold a `.fits` file and choose **Open With › iFITS**. You can also drag a file onto the iFITS window. Pinch to zoom, drag to move, and tap ↺ to reset the view. https://github.com/GalagaBits/iFITS/blob/main/docs/assets/videos/01-open-from-files.mp4
 2. **Change how the image looks (V).** In the **Render Configuration** panel, pick a colormap and a scaling (Linear, Log, Square Root, Squared, Gamma or Power), and set the clip range with a percentile or the red lines on the histogram.
 3. **Annotate (A).** Draw on the image with Apple Pencil. Annotations are saved inside the FITS file.
 4. **Regions and statistics (R, S).** Draw an ellipse, rectangle, line or point, then see its statistics in **S** mode. Regions can be imported and exported as DS9 `.reg` files.
