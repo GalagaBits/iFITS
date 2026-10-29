@@ -44,12 +44,26 @@ https://github.com/user-attachments/assets/f295cccb-266f-410b-8453-2d7a38829231
 
 
 2. **Change how the image looks (V).** In the **Render Configuration** panel, pick a colormap and a scaling (Linear, Log, Square Root, Squared, Gamma or Power), and set the clip range with a percentile or the red lines on the histogram.
+
+https://github.com/user-attachments/assets/b3332e35-23fd-4d07-afd0-7d99eea99cb9
+
+
 3. **Annotate (A).** Draw on the image with Apple Pencil. Annotations are saved inside the FITS file.
+
+
+https://github.com/user-attachments/assets/0e92dcba-f78c-4100-bbf4-0c169a46b8a3
+
+
 4. **Regions and statistics (R, S).** Draw an ellipse, rectangle, line or point, then see its statistics in **S** mode. Regions can be imported and exported as DS9 `.reg` files.
+
 5. **FITS header.** Tap **H** to see every keyword and value.
+
 6. **Data cubes.** For a cube, tap the cube button to play or step through the channels.
+
 7. **Spectra.** Tap the spectrum button, then hover over or double-tap a pixel, or pick a region, to see its spectrum.
+
 8. **3D view and AR.** Tap the AR button to rotate the cube in 3D, then tap **Place the cube in the room** to see it through the camera.
+
 
 Annotations and regions save automatically (turn off **Autosave** in **••• › Settings**). Use the share button to send the FITS file, or **Export and Send…** for a PNG or JPEG.
 
