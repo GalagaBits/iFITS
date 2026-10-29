@@ -36,9 +36,20 @@ Many students, astronomers, and astrophysicists utilize iPads to take handwritte
 
 This section is still a work in progress. Currently, users can download this repository and build the app on an iPad running iPadOS 27 or later using Xcode 27+. Eventually, users will be able to download this iPad app on the App Store for free.
 
-## Using the app
+## Quick start
 
-This section is under progress.
+**[See the full quick start with videos →](https://galagabits.github.io/iFITS/)**
+
+1. **Open a FITS file.** Tap **Open File** at the top left, or in the Files app touch and hold a `.fits` file and choose **Open With › iFITS**. You can also drag a file onto the iFITS window. Pinch to zoom, drag to move, and tap ↺ to reset the view.
+2. **Change how the image looks (V).** In the **Render Configuration** panel, pick a colormap and a scaling (Linear, Log, Square Root, Squared, Gamma or Power), and set the clip range with a percentile or the red lines on the histogram.
+3. **Annotate (A).** Draw on the image with Apple Pencil. Annotations are saved inside the FITS file.
+4. **Regions and statistics (R, S).** Draw an ellipse, rectangle, line or point, then see its statistics in **S** mode. Regions can be imported and exported as DS9 `.reg` files.
+5. **FITS header.** Tap **H** to see every keyword and value.
+6. **Data cubes.** For a cube, tap the cube button to play or step through the channels.
+7. **Spectra.** Tap the spectrum button, then hover over or double-tap a pixel, or pick a region, to see its spectrum.
+8. **3D view and AR.** Tap the AR button to rotate the cube in 3D, then tap **Place the cube in the room** to see it through the camera.
+
+Annotations and regions save automatically (turn off **Autosave** in **••• › Settings**). Use the share button to send the FITS file, or **Export and Send…** for a PNG or JPEG.
 
 ## License and attribution
 
