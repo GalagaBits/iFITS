@@ -23,7 +23,7 @@ nonisolated struct CatalogEntry: Identifiable, Hashable, Sendable {
 
     /// The download link as a URL. iOS only downloads https links, so http becomes https.
     var url: URL? { URL(string: link.replacingOccurrences(of: "http://", with: "https://")) }
-
+    
     /// The file's name: everything after the last "/" in the link, e.g. "HorseHead.fits".
     /// For MAST links that's the name at the end of "?uri=mast:JWST/product/….fits".
     var fileName: String { (link as NSString).lastPathComponent }
