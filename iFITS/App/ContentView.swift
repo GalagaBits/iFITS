@@ -194,7 +194,8 @@ struct ContentView: View {
 
     // Saving annotations into the FITS file
     @State var loadedFileURL: URL? = nil
-    @State var copyDocument: FITSFileDocument? = nil
+    /// "Save as Copy…": the finished copy (in a temporary folder) waiting to be moved where you choose.
+    @State var copyFileURL: URL? = nil
     @State var showCopyExporter = false
     @State var saveMessage: String? = nil
     @State var saveError: String? = nil
@@ -526,16 +527,20 @@ struct ContentView: View {
             animator.togglePlay()
             return .handled
         }
-        // "Save as Copy…": lets you choose where the copy goes.
-        .fileExporter(isPresented: $showCopyExporter,
-                      document: copyDocument,
-                      contentType: FITSFileDocument.fitsType,
-                      defaultFilename: (fileName as NSString).deletingPathExtension + "_copy") { result in
+        // "Save as Copy…": lets you choose where the copy goes (the copy is moved there, not
+        // loaded into memory, so huge files work).
+        .fileMover(isPresented: $showCopyExporter, file: copyFileURL) { result in
             switch result {
             case .success(let url): showSaveMessage("Saved copy \(url.lastPathComponent)")
-            case .failure(let error): saveError = error.localizedDescription
+            case .failure(let error):
+                // Cancelling isn't a problem worth reporting.
+                if (error as? CocoaError)?.code != .userCancelled { saveError = error.localizedDescription }
             }
-            copyDocument = nil
+            // Tidy up the temporary folder (empty once the copy was moved).
+            if let copy = copyFileURL {
+                try? FileManager.default.removeItem(at: copy.deletingLastPathComponent())
+            }
+            copyFileURL = nil
             restoreImageFocus()
         }
     }

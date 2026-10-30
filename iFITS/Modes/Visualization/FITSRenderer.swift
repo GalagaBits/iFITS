@@ -82,6 +82,27 @@ final class FITSRenderer {
         request(settings)
     }
 
+    /// A 1 × 1 transparent picture: stands in for the image while the GPU draws it.
+    static let placeholderImage: UIImage = UIGraphicsImageRenderer(size: CGSize(width: 1, height: 1)).image { _ in }
+
+    /// Every `step`-th pixel in each direction (nearest neighbour), for a smaller picture of a huge
+    /// image, e.g. an export that's at most 4096 pixels wide anyway.
+    nonisolated static func subsample(_ data: [Float], width: Int, height: Int,
+                                      step: Int) -> (pixels: [Float], width: Int, height: Int) {
+        guard step > 1, width > 0, height > 0, data.count >= width * height else { return (data, width, height) }
+        let w = (width + step - 1) / step, h = (height + step - 1) / step
+        var out = [Float](repeating: .nan, count: w * h)
+        data.withUnsafeBufferPointer { src in
+            out.withUnsafeMutableBufferPointer { dst in
+                for r in 0..<h {
+                    let s = r * step * width, d = r * w
+                    for c in 0..<w { dst[d + c] = src[s + c * step] }
+                }
+            }
+        }
+        return (out, w, h)
+    }
+
     /// Entries in the colour table (scaling + colormap folded together).
     nonisolated static let tableSize = 4096
 

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import Foundation
 
 nonisolated struct ImageStats {
     /// Finite pixel values (sub-sampled for very large images), ascending.
@@ -18,11 +19,9 @@ nonisolated struct ImageStats {
     let bins: [Int]
 
     init(values: [Float], width: Int = 0, binCount: Int = 256, maxSamples: Int = 1_000_000) {
-        var lo = Float.infinity, hi = -Float.infinity
-        for v in values where v.isFinite {
-            if v < lo { lo = v }
-            if v > hi { hi = v }
-        }
+        // Smallest and largest finite value, on every CPU core (each chunk finds its own, then the
+        // chunks' results are combined), instead of one long loop over every pixel.
+        let (lo, hi) = ImageStats.finiteRange(values)
 
         // Evenly spread sample; the step is kept odd and off the row width to avoid column striping.
         var step = max(1, values.count / maxSamples)
@@ -71,6 +70,26 @@ nonisolated struct ImageStats {
         bins = counts
     }
 
+    /// (min, max) of the finite values; (inf, -inf) when there are none.
+    static func finiteRange(_ values: [Float]) -> (Float, Float) {
+        let n = values.count
+        let chunks = n < 262_144 ? 1 : max(1, ProcessInfo.processInfo.activeProcessorCount * 2)
+        var los = [Float](repeating: .infinity, count: chunks)
+        var his = [Float](repeating: -.infinity, count: chunks)
+        values.withUnsafeBufferPointer { src in
+            los.withUnsafeMutableBufferPointer { loBuf in
+                his.withUnsafeMutableBufferPointer { hiBuf in
+                    guard let s = src.baseAddress, let l = loBuf.baseAddress, let h = hiBuf.baseAddress else { return }
+                    let job = RangeJob(src: s, los: l, his: h)
+                    DispatchQueue.concurrentPerform(iterations: chunks) { c in
+                        job.run(chunk: c, from: c * n / chunks, to: (c + 1) * n / chunks)
+                    }
+                }
+            }
+        }
+        return (los.min() ?? .infinity, his.max() ?? -.infinity)
+    }
+
     static func quantile(_ s: [Float], _ q: Double) -> Double {
         guard !s.isEmpty else { return 0 }
         let pos = min(max(q, 0), 1) * Double(s.count - 1)
@@ -90,5 +109,25 @@ nonisolated struct ImageStats {
         let a = ImageStats.quantile(sorted, tail)
         let b = ImageStats.quantile(sorted, 1 - tail)
         return b > a ? (a, b) : (a, a + max(abs(a) * 1e-6, 1e-12))
+    }
+}
+
+/// One chunk of ImageStats.finiteRange: finds its min and max and stores them in its own slot.
+nonisolated private struct RangeJob: @unchecked Sendable {
+    let src: UnsafePointer<Float>
+    let los: UnsafeMutablePointer<Float>
+    let his: UnsafeMutablePointer<Float>
+
+    func run(chunk c: Int, from start: Int, to end: Int) {
+        var lo = Float.infinity, hi = -Float.infinity
+        for i in start..<end {
+            let v = src[i]
+            if v.isFinite {
+                if v < lo { lo = v }
+                if v > hi { hi = v }
+            }
+        }
+        los[c] = lo
+        his[c] = hi
     }
 }

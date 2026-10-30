@@ -55,13 +55,19 @@ extension ContentView {
     /// with annotations and regions, on a white background.
     func renderExportImage() -> UIImage? {
         guard let shown = fitsImage, imageWidth > 0, imageHeight > 0 else { return nil }
-        // With the GPU view, `fitsImage` may have been drawn with earlier settings (the GPU recolours
-        // the screen without making a new picture), so draw one with the current settings.
-        let pixels = renderer.pixelData
-        let image = gpuImage.isReady
-            ? (FITSRenderer.render(pixels.pixels, width: pixels.width, height: pixels.height,
-                                   settings: renderSettings) ?? shown)
-            : shown
+        // With the GPU view there's no up-to-date CPU picture (the GPU recolours the screen without
+        // making one), so draw one now with the current settings. The export is at most 4096 pixels
+        // wide, so a huge image is drawn from every 2nd, 3rd, … pixel: same result, far less memory.
+        let image: UIImage
+        if gpuImage.isReady {
+            let all = renderer.pixelData
+            let step = max(1, max(all.width, all.height) / 4096)
+            let few = FITSRenderer.subsample(all.pixels, width: all.width, height: all.height, step: step)
+            image = FITSRenderer.render(few.pixels, width: few.width, height: few.height,
+                                        settings: renderSettings) ?? shown
+        } else {
+            image = shown
+        }
         let w = imageWidth, h = imageHeight
         // Points across the long side, and the pixel scale on top of that.
         let points: CGFloat = 1024

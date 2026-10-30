@@ -47,12 +47,10 @@ extension ContentView {
             NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing,
                                            error: &coordinatorError) { writeURL in
                 do {
-                    let original = try Data(contentsOf: writeURL)
-                    let updated = FITSAnnotationStore.updating(original, drawing: drawing, regionLines: regionLines)
-                    if updated != original {
-                        try updated.write(to: writeURL, options: .atomic)
-                        changed = true
-                    }
+                    // Only the small iFITS extensions at the end are rewritten (the whole file used
+                    // to be read and written again, which ran out of memory on 1 GB files).
+                    changed = try FITSAnnotationStore.saveInPlace(at: writeURL, drawing: drawing,
+                                                                  regionLines: regionLines)
                 } catch {
                     failure = error
                 }
@@ -91,21 +89,36 @@ extension ContentView {
 
     /// "Save as Copy…" (⇧⌘S): a copy of the loaded FITS file with the annotations and regions
     /// added, saved wherever you choose.
+    ///
+    /// The file is copied on disk (not through memory), the extensions are added to the copy, and
+    /// the copy is then moved where you choose, so this works for files of any size.
     func saveCopy() {
         guard let url = loadedFileURL else { return }
         let drawing = annotations.drawingData()
         let regionLines = DS9Regions.fitsLines(regionStore.regions)
+        let copyName = (fileName as NSString).deletingPathExtension + "_copy.fits"
         DispatchQueue.global(qos: .userInitiated).async {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            let manager = FileManager.default
+            let temp = manager.temporaryDirectory
+            // Copies left from an earlier "Save as Copy…" that was cancelled (they can be big).
+            for old in (try? manager.contentsOfDirectory(at: temp, includingPropertiesForKeys: nil)) ?? []
+            where old.lastPathComponent.hasPrefix("Copy-") {
+                try? manager.removeItem(at: old)
+            }
+            let folder = temp.appendingPathComponent("Copy-\(UUID().uuidString)", isDirectory: true)
             do {
-                let original = try Data(contentsOf: url)
-                let updated = FITSAnnotationStore.updating(original, drawing: drawing, regionLines: regionLines)
+                try manager.createDirectory(at: folder, withIntermediateDirectories: true)
+                let copy = folder.appendingPathComponent(copyName)
+                try manager.copyItem(at: url, to: copy)
+                _ = try FITSAnnotationStore.saveInPlace(at: copy, drawing: drawing, regionLines: regionLines)
                 DispatchQueue.main.async {
-                    copyDocument = FITSFileDocument(data: updated)
+                    copyFileURL = copy
                     showCopyExporter = true
                 }
             } catch {
+                try? manager.removeItem(at: folder)
                 DispatchQueue.main.async { saveError = error.localizedDescription }
             }
         }
@@ -324,6 +337,9 @@ extension ContentView {
         let keepIndices = keepView ? animator.indices : []
         let keepPlane = keepView ? cubeSource?.planeIndex(animator.indices) : nil
         let keepImageSize = CGSize(width: imageWidth, height: imageHeight)
+        // The GPU draws the image, so the full-size CPU picture isn't needed (it can be as big as
+        // the file). If the GPU can't take the image after all, the CPU draws it then.
+        let gpuWillDraw = gpuImage.isAvailable
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -351,10 +367,8 @@ extension ContentView {
                 // Physical values = BZERO + BSCALE × stored value; BLANK (integer images) → NaN.
                 // Flipped so FITS row 1 is at the bottom, like CARTA / DS9 (north up, RA along x).
                 // When keeping the view of a cube, start on the same channel.
-                let firstPlane = FITSPhysical.flipRows(
-                    FITSPhysical.apply(result.floats, bscale: result.bscale, bzero: result.bzero,
-                                       header: result.headerDict),
-                    width: result.width, height: result.height)
+                // Already physical values with rows flipped (FITSDecoder does it while decoding).
+                let firstPlane = result.floats
                 let keptPlane: (pixels: [Float], plane: Int)? = {
                     guard let keepPlane, keepPlane > 0, let cube, keepPlane < cube.planeCount,
                           let planePixels = cube.loadPlane(keepPlane) else { return nil }
@@ -365,8 +379,9 @@ extension ContentView {
                 let stats = ImageStats(values: pixels, width: result.width)
                 var settings = baseSettings
                 (settings.clipMin, settings.clipMax) = stats.clipRange(percentile: percentile)
-                let generatedImage = FITSRenderer.render(pixels, width: result.width,
-                                                         height: result.height, settings: settings)
+                let generatedImage: UIImage? = gpuWillDraw
+                    ? nil
+                    : FITSRenderer.render(pixels, width: result.width, height: result.height, settings: settings)
 
                 DispatchQueue.main.async {
                     self.renderer.load(pixels, width: result.width, height: result.height,
@@ -376,7 +391,11 @@ extension ContentView {
                     self.imageStats = stats
                     self.clipSelection = .percentile(percentile)
                     self.renderSettings = settings
-                    self.fitsImage = generatedImage
+                    // With the GPU drawing, a tiny stand-in picture marks that an image is open.
+                    self.fitsImage = generatedImage ?? FITSRenderer.placeholderImage
+                    if generatedImage == nil, !self.gpuImage.isReady {
+                        self.renderer.refresh(settings)   // the GPU couldn't take it: draw on the CPU
+                    }
                     // The image, panel and annotation layers were just added: make sure the
                     // window still has keyboard focus.
                     self.restoreImageFocus()
@@ -452,7 +471,7 @@ extension ContentView {
                     }
 
                     self.isLoading = false
-                    if generatedImage == nil {
+                    if generatedImage == nil, !gpuWillDraw {
                         self.errorMessage = "Failed to generate image from FITS data."
                     }
                 }
