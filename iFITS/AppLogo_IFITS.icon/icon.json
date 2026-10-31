@@ -1,0 +1,190 @@
+{
+  "features" : [
+    "refractivity"
+  ],
+  "fill" : {
+    "automatic-gradient" : "extended-srgb:0.00000,0.53333,1.00000,1.00000"
+  },
+  "groups" : [
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "hidden" : true,
+          "image-name" : "4_window_large_rim.png",
+          "name" : "4_window_large_rim",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "6_glass_large.png",
+          "name" : "6_glass_large",
+          "opacity" : 0.4,
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              1,
+              13
+            ]
+          }
+        }
+      ],
+      "refractivity" : {
+        "depth" : 0.0553125,
+        "enabled" : true,
+        "strength" : 0.698125
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    },
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "hidden" : false,
+          "image-name" : "3_window_small_rim.png",
+          "name" : "3_window_small_rim",
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              -1
+            ]
+          }
+        },
+        {
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "5_glass_small.png",
+          "name" : "5_glass_small",
+          "opacity" : 0.4,
+          "position" : {
+            "scale" : 1,
+            "translation-in-points" : [
+              0,
+              -7
+            ]
+          }
+        }
+      ],
+      "refractivity" : {
+        "depth" : 0.288828125,
+        "enabled" : true,
+        "strength" : 0.248203125
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    },
+    {
+      "blur-material" : null,
+      "layers" : [
+        {
+          "fill-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : {
+                "solid" : "extended-gray:0.25000,1.00000"
+              }
+            }
+          ],
+          "hidden-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "tinted",
+              "value" : false
+            }
+          ],
+          "image-name" : "7_frame.png",
+          "name" : "7_frame",
+          "opacity-specializations" : [
+            {
+              "appearance" : "tinted",
+              "value" : 0.16
+            }
+          ],
+          "position" : {
+            "scale" : 1.07,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        },
+        {
+          "glass-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "dark",
+              "value" : false
+            },
+            {
+              "appearance" : "tinted",
+              "value" : false
+            }
+          ],
+          "image-name" : "2_sky.png",
+          "name" : "2_sky"
+        },
+        {
+          "hidden-specializations" : [
+            {
+              "value" : false
+            },
+            {
+              "appearance" : "dark",
+              "value" : true
+            },
+            {
+              "appearance" : "tinted",
+              "value" : true
+            }
+          ],
+          "image-name" : "1_background.png",
+          "name" : "1_background"
+        }
+      ],
+      "refractivity" : {
+        "depth" : 0.5840625,
+        "enabled" : false,
+        "strength" : 0.169296875
+      },
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : false,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
