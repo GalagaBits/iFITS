@@ -8,43 +8,6 @@
 import SwiftUI
 import UIKit
 
-/// Raw pointers for the parallel plane decoder. Each chunk writes only its own part of `out`.
-nonisolated private struct PlaneBuffers: @unchecked Sendable {
-    let src: UnsafeRawPointer
-    let out: UnsafeMutablePointer<Float>
-
-    /// Big-endian FITS values [lo, hi) → Float.
-    func decode(from lo: Int, to hi: Int, bitpix: Int) {
-        guard lo < hi else { return }
-        switch bitpix {
-        case 8:
-            for i in lo..<hi { out[i] = Float(src.load(fromByteOffset: i, as: UInt8.self)) }
-        case 16:
-            for i in lo..<hi {
-                out[i] = Float(Int16(bitPattern: UInt16(bigEndian: src.loadUnaligned(fromByteOffset: i * 2, as: UInt16.self))))
-            }
-        case 32:
-            for i in lo..<hi {
-                out[i] = Float(Int32(bitPattern: UInt32(bigEndian: src.loadUnaligned(fromByteOffset: i * 4, as: UInt32.self))))
-            }
-        case 64:
-            for i in lo..<hi {
-                out[i] = Float(Int64(bitPattern: UInt64(bigEndian: src.loadUnaligned(fromByteOffset: i * 8, as: UInt64.self))))
-            }
-        case -32:
-            for i in lo..<hi {
-                out[i] = Float(bitPattern: UInt32(bigEndian: src.loadUnaligned(fromByteOffset: i * 4, as: UInt32.self)))
-            }
-        case -64:
-            for i in lo..<hi {
-                out[i] = Float(Double(bitPattern: UInt64(bigEndian: src.loadUnaligned(fromByteOffset: i * 8, as: UInt64.self))))
-            }
-        default:
-            break
-        }
-    }
-}
-
 /// The loaded cube: the file's bytes (memory-mapped) plus where each plane is.
 nonisolated struct CubeSource: Sendable {
     let data: Data
@@ -98,20 +61,13 @@ nonisolated struct CubeSource: Sendable {
         let start = dataOffset + plane * n * bytes
         guard start >= 0, start + n * bytes <= data.count else { return nil }
 
-        var raw = [Float](repeating: 0, count: n)
-        let bitpix = self.bitpix
-        data.withUnsafeBytes { (src: UnsafeRawBufferPointer) in
-            raw.withUnsafeMutableBufferPointer { dst in
-                guard let srcBase = src.baseAddress, let dstBase = dst.baseAddress else { return }
-                let buffers = PlaneBuffers(src: srcBase.advanced(by: start), out: dstBase)
-                let chunks = max(1, min(16, n / 65_536))
-                DispatchQueue.concurrentPerform(iterations: chunks) { c in
-                    buffers.decode(from: c * n / chunks, to: (c + 1) * n / chunks, bitpix: bitpix)
-                }
-            }
+        // Decode, physical values and row flip in one parallel pass (FITSPhysical.displayPixels).
+        return data.withUnsafeBytes { (src: UnsafeRawBufferPointer) -> [Float]? in
+            guard let base = src.baseAddress else { return nil }
+            return FITSPhysical.displayPixels(from: base.advanced(by: start), bitpix: bitpix,
+                                              width: width, height: height,
+                                              bscale: bscale, bzero: bzero, header: header)
         }
-        let physical = FITSPhysical.apply(raw, bscale: bscale, bzero: bzero, header: header)
-        return FITSPhysical.flipRows(physical, width: width, height: height)
     }
 }
 
@@ -121,6 +77,8 @@ nonisolated struct CubePlaneRequest: Sendable {
     let settings: RenderSettings
     /// Clip percentile to apply to this plane (nil = keep the manual clip).
     let percentile: Double?
+    /// Also colour the plane on the CPU (not needed while the GPU view draws the image).
+    var drawImage = true
 }
 
 nonisolated struct CubePlaneResult: @unchecked Sendable {
@@ -178,7 +136,9 @@ final class CubePlaneLoader {
         if let p = request.percentile {
             (settings.clipMin, settings.clipMax) = stats.clipRange(percentile: p)
         }
-        let image = FITSRenderer.render(pixels, width: source.width, height: source.height, settings: settings)
+        let image = request.drawImage
+            ? FITSRenderer.render(pixels, width: source.width, height: source.height, settings: settings)
+            : nil
         return CubePlaneResult(plane: request.plane, pixels: pixels, stats: stats, settings: settings, image: image)
     }
 }

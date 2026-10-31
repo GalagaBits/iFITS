@@ -11,6 +11,8 @@ class FITSDecoder {
 
     // Result structure to hold parsed FITS data
     struct Result {
+        /// The first plane's pixels in physical units (BSCALE, BZERO, BLANK applied), rows flipped
+        /// for display (FITS row 1 at the bottom), ready to show.
         var floats: [Float]
         var width: Int
         var height: Int
@@ -46,22 +48,23 @@ class FITSDecoder {
                 let blockEnd = min(offset + 2880, data.count)
                 guard blockEnd > offset else { break }
 
-                let currentBlockData = data[offset..<blockEnd]
-                headerData.append(currentBlockData)
+                let blockStart = offset
+                headerData.append(data[blockStart..<blockEnd])
                 offset = blockEnd
 
-                if let cumulativeString = String(data: headerData, encoding: .ascii) {
-                    if cumulativeString.contains("END" + String(repeating: " ", count: 77)) {
-                        headerString = cumulativeString
-                        endCardFound = true
-                        break
-                    }
-                } else {
-                    throw NSError(domain: "FITS", code: -6, userInfo: [NSLocalizedDescriptionKey: "Corrupt data found while reading header."])
+                // Only this block's 36 cards are checked for END (the whole header so far used to be
+                // turned into text again after every block, which is slow for long JWST headers).
+                if FITSDecoder.blockHasEndCard(data, from: blockStart, to: blockEnd) {
+                    endCardFound = true
+                    break
                 }
             }
 
             guard endCardFound else { break }
+            guard let text = String(data: headerData, encoding: .ascii) else {
+                throw NSError(domain: "FITS", code: -6, userInfo: [NSLocalizedDescriptionKey: "Corrupt data found while reading header."])
+            }
+            headerString = text
 
             let dataStartOffset = offset
 
@@ -119,24 +122,13 @@ class FITSDecoder {
 
                 let slice = data[dataStartOffset..<(dataStartOffset + sliceDataSize)]
 
-                var floats = [Float](repeating: 0, count: pixelsInSlice)
-
-                slice.withUnsafeBytes { buf in
-                    guard let base = buf.baseAddress else { return }
-                    DispatchQueue.concurrentPerform(iterations: pixelsInSlice) { i in
-                        let ptr = base.advanced(by: i * bytesPerPixel)
-                        let rv: Float
-                        switch bitpix {
-                        case 8: rv = Float(ptr.load(as: UInt8.self))
-                        case 16: rv = Float(Int16(bitPattern: UInt16(bigEndian: ptr.loadUnaligned(as: UInt16.self))))
-                        case 32: rv = Float(Int32(bitPattern: UInt32(bigEndian: ptr.loadUnaligned(as: UInt32.self))))
-                        case -32: rv = Float(bitPattern: UInt32(bigEndian: ptr.loadUnaligned(as: UInt32.self)))
-                        case -64: rv = Float(Double(bitPattern: UInt64(bigEndian: ptr.loadUnaligned(as: UInt64.self))))
-                        case 64: rv = Float(Int64(bitPattern: UInt64(bigEndian: ptr.loadUnaligned(as: UInt64.self))))
-                        default: rv = 0
-                        }
-                        floats[i] = rv
-                    }
+                // Decoded, converted to physical values and flipped for display in one parallel pass
+                // (this used to start one task per pixel, then copy the image twice more).
+                let floats: [Float] = slice.withUnsafeBytes { buf in
+                    guard let base = buf.baseAddress else { return [Float](repeating: .nan, count: pixelsInSlice) }
+                    return FITSPhysical.displayPixels(from: base, bitpix: bitpix, width: w, height: h,
+                                                      bscale: loadedBscale, bzero: loadedBzero,
+                                                      header: currentHeaderDict)
                 }
 
                 let axisLengths = (1...naxis).map { Int(currentHeaderDict["NAXIS\($0)"] ?? "") ?? 0 }
@@ -163,5 +155,23 @@ class FITSDecoder {
         } else {
             throw NSError(domain: "FITS", code: -1, userInfo: [NSLocalizedDescriptionKey: "No 2D image HDU found in the file."])
         }
+    }
+
+    /// Whether the 2880-byte header block [start, end) has an END card: a card (every 80 bytes)
+    /// that is "END" followed by spaces.
+    static func blockHasEndCard(_ data: Data, from start: Int, to end: Int) -> Bool {
+        var card = start
+        while card + 80 <= end {
+            if data[card] == UInt8(ascii: "E"), data[card + 1] == UInt8(ascii: "N"), data[card + 2] == UInt8(ascii: "D") {
+                var blank = true
+                for i in (card + 3)..<(card + 80) where data[i] != UInt8(ascii: " ") {
+                    blank = false
+                    break
+                }
+                if blank { return true }
+            }
+            card += 80
+        }
+        return false
     }
 }

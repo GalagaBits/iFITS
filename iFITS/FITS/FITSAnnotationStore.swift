@@ -70,6 +70,62 @@ nonisolated enum FITSAnnotationStore {
         return out
     }
 
+    /// Saves the annotations and regions into the file at `url` without loading the file into
+    /// memory, so huge files (1 GB and more) save as quickly as small ones.
+    ///
+    /// iFITS's extensions always sit at the end of the file, after the image data. So instead of
+    /// reading the whole file, changing it and writing all of it back (which needs two or three
+    /// times the file's size in memory), this cuts the file just before the old iFITS extensions
+    /// and writes the new ones there: only a few kilobytes are written, and the image data is
+    /// never touched. Returns true if the file changed.
+    ///
+    /// The rare file where other HDUs come *after* iFITS's extensions is saved the old way.
+    static func saveInPlace(at url: URL, drawing: Data?, regionLines: [String]) throws -> Bool {
+        let newTail = extensionHDUs(drawing: drawing, regionLines: regionLines)
+
+        // Look at the file through a memory map: only the header blocks are read from disk, not
+        // the image data. Kept inside this closure so the map is gone before the file is changed.
+        enum Plan { case unchanged, cut(at: Int), rewrite(Data) }
+        let plan: Plan = try {
+            let mapped = try Data(contentsOf: url, options: .alwaysMapped)
+            let hdus = scan(mapped)
+            func isOurs(_ hdu: HDU) -> Bool {
+                hdu.extname == extensionName || hdu.extname == regionExtensionName
+            }
+            // Where the run of iFITS extensions at the end of the file starts (file end if none).
+            var keep = mapped.count
+            for hdu in hdus.reversed() {
+                guard isOurs(hdu) else { break }
+                keep = hdu.range.lowerBound
+            }
+            if hdus.contains(where: { isOurs($0) && $0.range.lowerBound < keep }) {
+                // An iFITS extension in the middle of the file: rewrite it the old way.
+                let updated = updating(mapped, drawing: drawing, regionLines: regionLines)
+                return updated == mapped ? .unchanged : .rewrite(updated)
+            }
+            if mapped.count - keep == newTail.count, mapped[keep..<mapped.count] == newTail {
+                return .unchanged          // the same annotations and regions are already saved
+            }
+            return .cut(at: keep)
+        }()
+
+        switch plan {
+        case .unchanged:
+            return false
+        case .rewrite(let data):
+            try data.write(to: url, options: .atomic)
+            return true
+        case .cut(let keep):
+            let handle = try FileHandle(forWritingTo: url)
+            defer { try? handle.close() }
+            try handle.truncate(atOffset: UInt64(keep))   // drop the old iFITS extensions
+            try handle.seekToEnd()
+            if !newTail.isEmpty { try handle.write(contentsOf: newTail) }
+            try handle.synchronize()
+            return true
+        }
+    }
+
     /// Just the iFITS extensions (none if there's nothing to save), to append to a new file.
     static func extensionHDUs(drawing: Data?, regionLines: [String]) -> Data {
         var out = Data()
