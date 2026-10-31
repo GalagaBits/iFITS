@@ -1,6 +1,6 @@
 # iFITS — Astronomy Image Visualization and Viewer for iPadOS
 
-![](https://github.com/GalagaBits/iFITS/blob/main/images/Sample_Image_iFITS_Demo_extra.png)
+<img width="1344" height="545" alt="E8571877-7255-45A8-8F3D-4AD73D94277F_1_201_a" src="https://github.com/user-attachments/assets/8263ed48-ba40-4854-b4ca-d02fa8de0d34" />
 
 ---
 
@@ -37,6 +37,8 @@ Many students, astronomers, and astrophysicists utilize iPads to take handwritte
 This section is still a work in progress. Currently, users can download this repository and build the app on an iPad running iPadOS 27 or later using Xcode 27+. Eventually, users will be able to download this iPad app on the App Store for free.
 
 ## Quick start
+
+![](https://github.com/GalagaBits/iFITS/blob/main/images/Sample_Image_iFITS_Demo_extra.png)
 
 1. **Open a FITS file.** Tap **Open File** at the top left, or in the Files app touch and hold a `.fits` file and choose **Open With › iFITS**. You can also drag a file onto the iFITS window. Pinch to zoom, drag to move, and tap ↺ to reset the view. 
 
