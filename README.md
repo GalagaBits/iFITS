@@ -1,6 +1,7 @@
 # iFITS — Astronomy Image Visualization and Viewer for iPadOS
 
-<img width="1344" height="545" alt="E8571877-7255-45A8-8F3D-4AD73D94277F_1_201_a" src="https://github.com/user-attachments/assets/8263ed48-ba40-4854-b4ca-d02fa8de0d34" />
+<img width="1651" height="711" alt="iFITS_logo" src="https://github.com/user-attachments/assets/d7b07db0-9222-4179-819b-4a0590a473ec" />
+
 
 ---
 
