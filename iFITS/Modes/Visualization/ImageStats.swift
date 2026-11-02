@@ -146,7 +146,7 @@ nonisolated struct ImageStats {
         return a + (b - a) * f
     }
 
-    /// Symmetric clip like CARTA: 99.9% keeps the 0.05%–99.95% range.
+    /// Clip range that keeps the central p% of pixels: 99.9% keeps 0.05%–99.95%
     func clipRange(percentile p: Double) -> (Double, Double) {
         guard !sorted.isEmpty else { return (0, 1) }
         if p >= 100 {
