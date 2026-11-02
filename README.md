@@ -35,7 +35,7 @@ Many students, astronomers, and astrophysicists utilize iPads to take handwritte
 
 ## Installation
 
-This section is still a work in progress. Currently, users can download this repository and build the app on an iPad running iPadOS 27 or later using Xcode 27+. Eventually, users will be able to download this iPad app on the App Store for free.
+Users can download this app on the App Store (https://apps.apple.com/us/app/ifits-fits-image-viewer/id6820193593) or download this repository and build the app on an iPad running iPadOS 27 or later using Xcode 27+.
 
 ## Quick start
 
