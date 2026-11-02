@@ -39,12 +39,63 @@ struct ImageUniforms {
 
 /// One piece of the image on the GPU. Most images are a single tile; an image wider or taller
 /// than the GPU's largest texture is split into several.
-private struct ImageTile {
+nonisolated struct ImageTile: @unchecked Sendable {
     let texture: MTLTexture
     let x: Int
     let y: Int
     let width: Int
     let height: Int
+}
+
+/// An image already copied to the GPU, ready to show (see GPUUploader).
+nonisolated struct GPUImage: @unchecked Sendable {
+    let tiles: [ImageTile]
+    /// GPU memory it uses, in bytes.
+    var bytes: Int { tiles.reduce(0) { $0 + $1.width * $1.height * MemoryLayout<Float>.stride } }
+}
+
+/// Copies pixels to the GPU. Safe to use off the main thread (Metal allows that), so cube channels
+/// are uploaded in the background while the app stays responsive, instead of on the main thread.
+nonisolated struct GPUUploader: @unchecked Sendable {
+    let device: MTLDevice
+    /// The largest texture side the GPU allows; bigger images are split into tiles.
+    let maxSide: Int
+
+    /// The pixels (row 0 = top) as GPU textures, or nil if the GPU is out of memory.
+    func upload(pixels: [Float], width: Int, height: Int) -> GPUImage? {
+        guard width > 0, height > 0, pixels.count >= width * height else { return nil }
+        var tiles: [ImageTile] = []
+        var failed = false
+        pixels.withUnsafeBytes { raw in
+            guard let base = raw.baseAddress else { failed = true; return }
+            // Tiles of at most maxSide × maxSide pixels, left to right, top to bottom.
+            var y = 0
+            while y < height, !failed {
+                let h = min(maxSide, height - y)
+                var x = 0
+                while x < width, !failed {
+                    let w = min(maxSide, width - x)
+                    // One 32-bit float per pixel (the raw value, not a colour).
+                    let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float,
+                                                                     width: w, height: h, mipmapped: false)
+                    d.usage = .shaderRead
+                    d.storageMode = .shared
+                    if let texture = device.makeTexture(descriptor: d) {
+                        // Copy this tile's part of each row (rows are `width` pixels apart in memory).
+                        let start = base.advanced(by: (y * width + x) * MemoryLayout<Float>.stride)
+                        texture.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                                        withBytes: start, bytesPerRow: width * MemoryLayout<Float>.stride)
+                        tiles.append(ImageTile(texture: texture, x: x, y: y, width: w, height: h))
+                    } else {
+                        failed = true     // out of GPU memory: use the CPU renderer instead
+                    }
+                    x += w
+                }
+                y += h
+            }
+        }
+        return failed || tiles.isEmpty ? nil : GPUImage(tiles: tiles)
+    }
 }
 
 /// The settings that change the colour table (the clip range doesn't: it's just two numbers).
@@ -111,53 +162,31 @@ final class MetalImageRenderer {
         return device.supportsFamily(.apple3) ? 16384 : 8192
     }
 
-    /// Sends the raw pixel values (row 0 = top, as FITSRenderer stores them) to the GPU.
-    /// Called once per image and once per cube channel; nothing is uploaded while you change settings.
+    /// Copies pixels to the GPU from any thread (nil without Metal). Made here, on the main thread.
+    var uploader: GPUUploader? {
+        guard isAvailable, let device else { return nil }
+        return GPUUploader(device: device, maxSide: maxTextureSide)
+    }
+
+    /// Sends the raw pixel values (row 0 = top, as FITSRenderer stores them) to the GPU, right now
+    /// on this thread. Cube channels use `uploader` in the background and then `install` instead.
     /// New textures are made each time (the old ones are freed once the GPU is done with them),
     /// so a frame that's still being drawn never sees half-replaced pixels.
     func load(pixels: [Float], width: Int, height: Int) {
-        guard isAvailable, let device, width > 0, height > 0, pixels.count >= width * height else {
+        guard let image = uploader?.upload(pixels: pixels, width: width, height: height) else {
             unload()
             return
         }
-        let side = maxTextureSide
-        var newTiles: [ImageTile] = []
-        var failed = false
+        install(image)
+    }
 
-        pixels.withUnsafeBytes { raw in
-            guard let base = raw.baseAddress else { failed = true; return }
-            // Tiles of at most side × side pixels, left to right, top to bottom.
-            var y = 0
-            while y < height, !failed {
-                let h = min(side, height - y)
-                var x = 0
-                while x < width, !failed {
-                    let w = min(side, width - x)
-                    // One 32-bit float per pixel (the raw value, not a colour).
-                    let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r32Float,
-                                                                     width: w, height: h, mipmapped: false)
-                    d.usage = .shaderRead
-                    d.storageMode = .shared
-                    if let texture = device.makeTexture(descriptor: d) {
-                        // Copy this tile's part of each row (rows are `width` pixels apart in memory).
-                        let start = base.advanced(by: (y * width + x) * MemoryLayout<Float>.stride)
-                        texture.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
-                                        withBytes: start, bytesPerRow: width * MemoryLayout<Float>.stride)
-                        newTiles.append(ImageTile(texture: texture, x: x, y: y, width: w, height: h))
-                    } else {
-                        failed = true     // out of GPU memory: use the CPU renderer instead
-                    }
-                    x += w
-                }
-                y += h
-            }
-        }
-
-        if failed || newTiles.isEmpty {
+    /// Shows an image already copied to the GPU (by `uploader`, possibly in the background).
+    func install(_ image: GPUImage) {
+        guard isAvailable, !image.tiles.isEmpty else {
             unload()
             return
         }
-        tiles = newTiles
+        tiles = image.tiles
         revision += 1
         if !isReady { isReady = true }
     }

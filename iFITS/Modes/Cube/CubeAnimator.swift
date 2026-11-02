@@ -96,6 +96,34 @@ final class CubeAnimator {
         isPlaying.toggle()
     }
 
+    /// The channels the next `count` playback frames will show, in order, without changing
+    /// anything: the same steps as `tick()` (forward, backward, bouncing or blink, within the
+    /// playback range). Used to load channels ahead of time, like a video player's buffer.
+    func upcomingIndices(_ count: Int) -> [[Int]] {
+        let lo = rangeLower, hi = rangeUpper
+        guard count > 0, currentAxis != nil, hi > lo, indices.indices.contains(animatedAxis) else { return [] }
+        var c = current, bounce = bounceStep
+        var out: [[Int]] = []
+        for _ in 0..<count {
+            if c < lo || c > hi {
+                c = lo
+            } else {
+                switch playMode {
+                case .forward: c = c + 1 > hi ? lo : c + 1
+                case .backward: c = c - 1 < lo ? hi : c - 1
+                case .bouncing:
+                    if c + bounce > hi || c + bounce < lo { bounce = -bounce }
+                    c += bounce
+                case .blink: c = c == lo ? hi : lo
+                }
+            }
+            var frame = indices
+            frame[animatedAxis] = c
+            out.append(frame)
+        }
+        return out
+    }
+
     /// One playback frame.
     func tick() {
         let lo = rangeLower, hi = rangeUpper

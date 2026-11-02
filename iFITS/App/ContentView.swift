@@ -409,15 +409,9 @@ struct ContentView: View {
         .onChange(of: animatorExpanded) { _, expanded in
             if !expanded { withAnimation(.snappy) { showMiniAnimator = true } }
         }
-        // Playback: one channel step per frame at the chosen frame rate.
+        // Playback: buffered like a video, one channel step per frame (ContentView+Cube.swift).
         .task(id: playbackKey) {
-            guard playbackKey.playing else { return }
-            let interval = 1.0 / Double(max(1, playbackKey.framesPerSecond))
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(interval))
-                if Task.isCancelled { break }
-                animator.tick()
-            }
+            await runPlayback()
         }
         // Point the menu bar (FITSMenuCommands) at this window, once. Menu items read and
         // change the live state when used, so the menu bar never needs updating afterwards.
