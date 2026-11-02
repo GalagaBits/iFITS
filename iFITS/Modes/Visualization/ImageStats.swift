@@ -37,7 +37,9 @@ nonisolated struct ImageStats {
             if v.isFinite { sample.append(v) }
             i += step
         }
-        sample.sort()
+        // Sorted on every CPU core (same result as sample.sort(), several times faster). This is
+        // the slowest step of reading a cube channel, so it matters when stepping through channels.
+        sample = ImageStats.parallelSorted(sample)
         sorted = sample
 
         guard lo.isFinite, hi.isFinite, !sample.isEmpty else {
@@ -68,6 +70,51 @@ nonisolated struct ImageStats {
             counts[min(binCount - 1, Int((d - a) * k))] += 1
         }
         bins = counts
+    }
+
+    /// The values sorted ascending, using every core: each core sorts its own part, then the
+    /// sorted parts are merged pairwise (also in parallel) until one sorted array is left.
+    /// Gives exactly the same order as `sorted()` (only finite values are passed in).
+    static func parallelSorted(_ values: [Float]) -> [Float] {
+        let n = values.count
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        guard n >= 131_072, cores > 1 else { return values.sorted() }
+        // Part p covers bounds[p]..<bounds[p + 1].
+        let count = min(16, cores)
+        var bounds = (0...count).map { $0 * n / count }
+        var a = values
+        var b = [Float](repeating: 0, count: n)
+        a.withUnsafeMutableBufferPointer { aBuf in
+            b.withUnsafeMutableBufferPointer { bBuf in
+                guard let aBase = aBuf.baseAddress, let bBase = bBuf.baseAddress else { return }
+                let job = SortJob(src: aBase, dst: bBase)
+                // 1. Sort each part.
+                let firstBounds = bounds
+                DispatchQueue.concurrentPerform(iterations: count) { p in
+                    job.sortRange(firstBounds[p], firstBounds[p + 1])
+                }
+                // 2. Merge neighbouring parts until one is left, swapping source and destination
+                //    each round.
+                var from = job.src, to = job.dst
+                while bounds.count > 2 {
+                    let current = bounds
+                    let pairs = current.count / 2      // parts = current.count − 1, rounded up / 2
+                    let step = MergeJob(src: from, dst: to)
+                    DispatchQueue.concurrentPerform(iterations: pairs) { k in
+                        let lo = current[2 * k]
+                        let mid = current[min(2 * k + 1, current.count - 1)]
+                        let hi = current[min(2 * k + 2, current.count - 1)]
+                        step.merge(lo, mid, hi)
+                    }
+                    bounds = stride(from: 0, to: current.count, by: 2).map { current[$0] }
+                    if bounds.last != n { bounds.append(n) }
+                    swap(&from, &to)
+                }
+                // The result is in `from`; make sure it ends up in `a`.
+                if from != aBase { aBase.update(from: from, count: n) }
+            }
+        }
+        return a
     }
 
     /// (min, max) of the finite values; (inf, -inf) when there are none.
@@ -129,5 +176,33 @@ nonisolated private struct RangeJob: @unchecked Sendable {
         }
         los[c] = lo
         his[c] = hi
+    }
+}
+
+/// Sorting one part of ImageStats.parallelSorted (each part is touched by one thread only).
+nonisolated private struct SortJob: @unchecked Sendable {
+    let src: UnsafeMutablePointer<Float>
+    let dst: UnsafeMutablePointer<Float>
+
+    func sortRange(_ lo: Int, _ hi: Int) {
+        guard hi - lo > 1 else { return }
+        var part = UnsafeMutableBufferPointer(start: src + lo, count: hi - lo)
+        part.sort()
+    }
+}
+
+/// Merging two neighbouring sorted parts [lo, mid) and [mid, hi) from `src` into `dst`.
+nonisolated private struct MergeJob: @unchecked Sendable {
+    let src: UnsafeMutablePointer<Float>
+    let dst: UnsafeMutablePointer<Float>
+
+    func merge(_ lo: Int, _ mid: Int, _ hi: Int) {
+        var i = lo, j = mid, k = lo
+        while i < mid && j < hi {
+            if src[j] < src[i] { dst[k] = src[j]; j += 1 } else { dst[k] = src[i]; i += 1 }
+            k += 1
+        }
+        while i < mid { dst[k] = src[i]; i += 1; k += 1 }
+        while j < hi { dst[k] = src[j]; j += 1; k += 1 }
     }
 }

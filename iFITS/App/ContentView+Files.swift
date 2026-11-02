@@ -340,6 +340,7 @@ extension ContentView {
         // The GPU draws the image, so the full-size CPU picture isn't needed (it can be as big as
         // the file). If the GPU can't take the image after all, the CPU draws it then.
         let gpuWillDraw = gpuImage.isAvailable
+        let uploader = gpuImage.uploader
 
         DispatchQueue.global(qos: .userInitiated).async {
             do {
@@ -379,6 +380,8 @@ extension ContentView {
                 let stats = ImageStats(values: pixels, width: result.width)
                 var settings = baseSettings
                 (settings.clipMin, settings.clipMax) = stats.clipRange(percentile: percentile)
+                // Copied to the GPU here in the background, not on the main thread.
+                let prepared = uploader?.upload(pixels: pixels, width: result.width, height: result.height)
                 let generatedImage: UIImage? = gpuWillDraw
                     ? nil
                     : FITSRenderer.render(pixels, width: result.width, height: result.height, settings: settings)
@@ -387,7 +390,11 @@ extension ContentView {
                     self.renderer.load(pixels, width: result.width, height: result.height,
                                        renderedWith: settings)
                     // Send the pixels to the GPU once; from now on settings changes are drawn there.
-                    self.gpuImage.load(pixels: pixels, width: result.width, height: result.height)
+                    if let prepared {
+                        self.gpuImage.install(prepared)
+                    } else {
+                        self.gpuImage.load(pixels: pixels, width: result.width, height: result.height)
+                    }
                     self.imageStats = stats
                     self.clipSelection = .percentile(percentile)
                     self.renderSettings = settings
