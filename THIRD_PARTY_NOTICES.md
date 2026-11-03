@@ -1,6 +1,6 @@
 # Third-party notices
 
-iFITS is MIT-licensed (see LICENSE). It includes the following third-party material.
+iFITS is GPL-3.0 licensed (see LICENSE). It includes the following third-party material.
 
 ## Matplotlib colormaps
 
