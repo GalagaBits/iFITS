@@ -72,7 +72,7 @@ Annotations and regions save automatically (turn off **Autosave** in **•••
 
 ## License and attribution
 
-This project is under the MIT License, which can be viewed [here](https://github.com/GalagaBits/iFITS/blob/main/LICENSE).
+This project is under the GPL-3.0 license, which can be viewed [here](https://github.com/GalagaBits/iFITS/blob/main/LICENSE).
 
 ## Disclosures and Comments
 
