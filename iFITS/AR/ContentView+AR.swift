@@ -41,7 +41,9 @@ extension ContentView {
         Color.clear
             .frame(width: 0, height: 0)
             .fullScreenCover(item: $arSource, onDismiss: { restoreImageFocus() }) { source in
+                // The AR screen is all floating controls over the cube, so it gets the same limit.
                 ARModeView(source: source, onClose: { arSource = nil })
+                    .widgetTextSizeLimit()
             }
     }
 }

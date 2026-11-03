@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// What the header window shows. Passed to the new window when "H" is tapped.
 struct FITSHeaderDocument: Codable, Hashable, Identifiable {
@@ -98,12 +99,14 @@ struct HeaderWindowView: View {
             .navigationTitle(document.fileName.isEmpty ? "FITS Header" : document.fileName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { close() } label: {
-                        Image(systemName: "xmark")
+                if showsCloseButton {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { close() } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityLabel("Close")
                     }
-                    .keyboardShortcut(.cancelAction)
-                    .accessibilityLabel("Close")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -124,6 +127,12 @@ struct HeaderWindowView: View {
             }
             .task { exportFiles = writeExportFiles() }
         }
+    }
+
+    /// ✕ shows in a sheet and in an iPad window. Not in an iPhone Duo window: dismissWindow() doesn't
+    /// close windows there, so you close it like any Split View window (drag the divider to the edge).
+    private var showsCloseButton: Bool {
+        onClose != nil || UIDevice.current.userInterfaceIdiom == .pad
     }
 
     private func close() {

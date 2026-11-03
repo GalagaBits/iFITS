@@ -17,6 +17,7 @@
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "1BFFC1013072179D0033C647"
                BuildableName = "iFITS.app"
+               BlueprintName = "iFITS"
                ReferencedContainer = "container:iFITS.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
@@ -46,6 +47,7 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1BFFC1013072179D0033C647"
             BuildableName = "iFITS.app"
+            BlueprintName = "iFITS"
             ReferencedContainer = "container:iFITS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
@@ -62,6 +64,7 @@
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "1BFFC1013072179D0033C647"
             BuildableName = "iFITS.app"
+            BlueprintName = "iFITS"
             ReferencedContainer = "container:iFITS.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>

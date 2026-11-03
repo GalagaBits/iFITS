@@ -220,10 +220,10 @@ extension ContentView {
 
     // MARK: - Spectra window
 
-    /// Opens the spectra in their own window (a sheet where extra windows aren't available).
+    /// Opens the spectra in their own window, or as a sheet where that isn't possible (see `opensExtraWindows`).
     func openSpectraWindow() {
         pushSpectraLink()
-        if UIApplication.shared.supportsMultipleScenes {
+        if opensExtraWindows {
             openWindow(id: "spectra", value: spectraLink.id)
         } else {
             showSpectraSheet = true

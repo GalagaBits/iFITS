@@ -214,6 +214,11 @@ struct ContentView: View {
     /// The "Export and Send" sheet (PNG / JPEG of the image).
     @State var exportRequest: ExportRequest? = nil
     @Environment(\.openWindow) var openWindow
+    
+    /// Size classes: iPhone Duo's inner display is regular in both (see `opensExtraWindows`).
+    @Environment(\.horizontalSizeClass) var horizontalSizeClass
+    @Environment(\.verticalSizeClass) var verticalSizeClass
+    
     /// Shared with the menu bar (FITSMenuCommands).
     @EnvironmentObject var commandCenter: FITSCommandCenter
 
@@ -345,10 +350,11 @@ struct ContentView: View {
         // (ContentView+Window.swift).
         withWindowServices(ZStack {
             imageArea
-            modeButtons
-            topRightPanels
-            saveToast
-            bottomDock
+            // The small floating widgets keep their text at most xxxLarge (WidgetTextSize.swift).
+            modeButtons.widgetTextSizeLimit()
+            topRightPanels.widgetTextSizeLimit()
+            saveToast.widgetTextSizeLimit()
+            bottomDock.widgetTextSizeLimit()
             hduPickerHost
             snrExporterHost
             arHost
@@ -356,8 +362,8 @@ struct ContentView: View {
             settingsHost
             exportHost
             shareAnchorLayer
-            colorbarLayer
-            bottomRightLayer
+            colorbarLayer.widgetTextSizeLimit()
+            bottomRightLayer.widgetTextSizeLimit()
             unsavedChangesHost
             dropHighlight
         })

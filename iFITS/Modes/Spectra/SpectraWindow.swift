@@ -8,6 +8,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 /// Connects a main window to its Spectra window. The main window keeps `display` up to date; the
 /// Spectra window shows it and sends changes back (the menus change the shared SpectrumModel, the
@@ -69,17 +70,25 @@ struct SpectraWindowView: View {
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button { close() } label: {
-                        Image(systemName: "xmark")
+                if showsCloseButton {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button { close() } label: {
+                            Image(systemName: "xmark")
+                        }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityLabel("Close")
                     }
-                    .keyboardShortcut(.cancelAction)
-                    .accessibilityLabel("Close")
                 }
             }
         }
         .onAppear { link?.windowAppeared() }
         .onDisappear { link?.windowDisappeared() }
+    }
+
+    /// ✕ shows in a sheet and in an iPad window. Not in an iPhone Duo window: dismissWindow() doesn't
+    /// close windows there, so you close it like any Split View window (drag the divider to the edge).
+    private var showsCloseButton: Bool {
+        onClose != nil || UIDevice.current.userInterfaceIdiom == .pad
     }
 
     private func close() {
