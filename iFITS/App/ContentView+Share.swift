@@ -133,7 +133,11 @@ extension ContentView {
         Color.clear
             .frame(width: 0, height: 0)
             .sheet(isPresented: $showSettings, onDismiss: { restoreImageFocus() }) {
-                SettingsSheet(autosave: $autosaveEnabled, onDone: { showSettings = false })
+                SettingsSheet(autosave: $autosaveEnabled,
+                              showModeButtons: $showModeButtons,
+                              // iPad and iPhone Duo (vertical bar) only; other iPhones never show them.
+                              canHideModeButtons: UIDevice.current.userInterfaceIdiom == .pad || hasVerticalToolbar,
+                              onDone: { showSettings = false })
                     .presentationSizing(.form)
             }
     }
@@ -142,6 +146,10 @@ extension ContentView {
 /// iFITS settings, like Pages': grouped switches, ✓ to close.
 struct SettingsSheet: View {
     @Binding var autosave: Bool
+    /// The V A R S buttons on the left.
+    @Binding var showModeButtons: Bool
+    /// iPad and iPhone Duo: the V A R S switch is shown.
+    var canHideModeButtons: Bool
     var onDone: () -> Void
 
     var body: some View {
@@ -153,6 +161,16 @@ struct SettingsSheet: View {
                     Text("Saving")
                 } footer: {
                     Text("Annotations and regions are saved into the FITS file automatically as you work. Turn this off to save only with Save (⌘S).")
+                }
+
+                if canHideModeButtons {
+                    Section {
+                        Toggle("V A R S Buttons", isOn: $showModeButtons)
+                    } header: {
+                        Text("Layout")
+                    } footer: {
+                        Text("The Visualization, Annotation, Regions and Statistics buttons on the left. When they're off, choose a mode from the » or ••• menu in the toolbar.")
+                    }
                 }
                 
                 Section {

@@ -146,6 +146,38 @@ struct ContentView: View {
     /// The Spectra "window" as a sheet, where extra windows aren't available.
     @State var showSpectraSheet = false
 
+    /// The toolbar is a vertical bar (iPhone Duo): its buttons are shown one by one and the system
+    /// moves the ones that don't fit into the » menu (see ContentView+Toolbar.swift).
+    @State var hasVerticalToolbar = false
+
+    /// iPhone Duo partly open: the crease, in window coordinates (nil when flat, closed, or not a Duo).
+    @State var foldFrame: CGRect? = nil
+
+    /// Book pose: a vertical crease (the bottom dock stays to its left).
+    var bookFold: CGRect? {
+        guard let fold = foldFrame, fold.height > fold.width else { return nil }
+        return fold
+    }
+
+    /// The cube mode button's symbol: play, or pause while the cube plays in cube mode.
+    var cubeModeSymbol: String {
+        selectedMode == "C" && animator.isPlaying ? "pause.fill" : "play.fill"
+    }
+
+    /// Laptop pose: a horizontal crease (the colorbar stays above it, the bottom dock below it).
+    var laptopFold: CGRect? {
+        guard let fold = foldFrame, fold.width > fold.height else { return nil }
+        return fold
+    }
+
+    /// Tallest a bottom dock may be (its content scrolls beyond that). In laptop pose it also stays
+    /// below the crease: the room under it, less the dock's bottom padding and a gap.
+    var dockMaxHeight: CGFloat {
+        let normal = windowLayout.dockMaxHeight
+        guard let fold = laptopFold, windowFrame.height > 0 else { return normal }
+        return min(normal, max(120, windowFrame.maxY - fold.maxY - 8 - 16))
+    }
+
     struct PlaybackKey: Equatable {
         let playing: Bool
         let framesPerSecond: Int
@@ -199,6 +231,9 @@ struct ContentView: View {
     @Environment(\.scenePhase) var scenePhase
     /// Annotations and regions are saved into the FITS file as you work (Settings).
     @AppStorage("autosaveEnabled") var autosaveEnabled = true
+    /// The V A R S buttons on the left (Settings, iPad and iPhone Duo). When they're off, the modes are
+    /// in the toolbar's » or ••• menu.
+    @AppStorage("showModeButtons") var showModeButtons = true
     /// `edits.editCount` when the file was last saved (or opened).
     @State var savedEditCount = 0
     @State var isSaving = false
@@ -287,6 +322,8 @@ struct ContentView: View {
             // Undo / redo (the window's undo manager, region steps) and autosave.
             withUndoAndAutosave(windowLayers)
                 .toolbar { astroToolBar }
+                // Whether the toolbar is a vertical bar right now (iPhone Duo).
+                .modifier(VerticalToolbarReader(isVertical: $hasVerticalToolbar))
                 // The file name is the title. Tap it to rename the file (like Pages).
                 .navigationTitle(Binding(get: { fileName.isEmpty ? "iFITS" : fileName },
                                          set: { renameLoadedFile(to: $0) }))
@@ -647,7 +684,7 @@ struct ContentView: View {
     /// The V A R S buttons on the left (in a small window they're in the toolbar's » menu).
     var modeButtons: some View {
         HStack {
-            if !windowLayout.isCompact {
+            if !windowLayout.isCompact && showModeButtons {
                 VStack(spacing: 35) {
                     VStack(spacing: 35) {
                         ForEach(modes, id: \.self) { mode in
@@ -841,17 +878,27 @@ struct ContentView: View {
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { panelHeight = $0 }
             .padding(.leading, dockLeadingInset)
-            .padding(.trailing, windowLayout.isCompact ? 12 : 24)
+            .padding(.trailing, dockTrailingInset)
             .padding(.bottom, 8)
             // Sized before the spacer above it, so a tall dock gets all the room it's allowed.
             .layoutPriority(1)
         }
     }
 
+    /// Right edge of the bottom dock. In book pose (iPhone Duo held like a book) it ends before the
+    /// crease, so the dock sits on the left page.
+    var dockTrailingInset: CGFloat {
+        let base: CGFloat = windowLayout.isCompact ? 12 : 24
+        guard let fold = bookFold, windowFrame.width > 0 else { return base }
+        return max(base, windowFrame.maxX - fold.minX + 16)
+    }
+
     /// Left edge of the bottom dock. When the window is too short for the dock to fit under the
     /// V A R S buttons, the dock starts to the right of them and the colorbar instead.
     var dockLeadingInset: CGFloat {
         if windowLayout.isCompact { return 12 }
+        // No V A R S buttons (turned off in Settings): nothing on the left to make room for.
+        if !showModeButtons { return 24 }
         guard modeButtonsBottom > 0, windowFrame.height > 0, panelHeight > 0 else { return 24 }
         let buttonsBottom = modeButtonsBottom - windowFrame.minY
         let dockTop = windowFrame.height - 8 - panelHeight
@@ -953,11 +1000,16 @@ struct ContentView: View {
                 }
             }
             .padding(.trailing, 24)
-            .padding(.bottom, dockVisible ? panelHeight + 20 : 16)
+            .padding(.bottom, miniAnimatorBottomInset)
             .transition(.move(edge: .trailing).combined(with: .opacity))
         }
     }
 
+    var miniAnimatorBottomInset: CGFloat {
+        guard dockVisible, bookFold == nil else { return 16 }
+        return panelHeight + 20
+    }
+    
     /// Bottom left, under the V A R S buttons: the vertical colorbar (whenever an image is open).
     /// It sits at the bottom, or just above the dock when the dock reaches across to the left, and
     /// gets shorter (or folds into its pill) when there isn't much room.
@@ -989,12 +1041,18 @@ struct ContentView: View {
     /// the top of the bottom dock if the dock reaches the colorbar's column.
     func colorbarSpace(in frame: CGRect) -> (bottom: CGFloat, barHeight: CGFloat, pillOnly: Bool, hidden: Bool) {
         var bottom = frame.maxY - 16
+        // Laptop pose (iPhone Duo half open, standing up): just above the crease, so the colorbar
+        // (which grows upwards when expanded) never reaches it.
+        if let fold = laptopFold {
+            bottom = min(bottom, fold.minY - 16)
+        }
         let columnRight = frame.minX + colorbarLeading + VerticalColorbar.width + 12
         if dockVisible, dockFrame.width > 0, dockFrame.minX < columnRight {
             bottom = min(bottom, dockFrame.minY - 16)
         }
         // Small window (no V A R S buttons): from just under the one-line Pixel Info.
-        let top = windowLayout.isCompact
+        // Small window, or the V A R S buttons turned off: from near the top.
+        let top = windowLayout.isCompact || !showModeButtons
             ? frame.minY + 52
             : (modeButtonsBottom > 0 ? modeButtonsBottom : frame.minY + 445) + 24
         let room = bottom - top

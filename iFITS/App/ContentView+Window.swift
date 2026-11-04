@@ -14,7 +14,8 @@ extension ContentView {
         content
             // Small windows: every panel picks its narrow layout, and the docks stay short enough.
             .environment(\.compactLayout, windowLayout.isCompact)
-            .environment(\.dockMaxHeight, windowLayout.dockMaxHeight)
+            // Also keeps the docks below the crease in laptop pose (iPhone Duo).
+            .environment(\.dockMaxHeight, dockMaxHeight)
             .background { layoutReader }
             // The menu bar acts on whichever iFITS window is in front.
             .background {
@@ -83,6 +84,8 @@ extension ContentView {
                     windowLayout = new
                 }
             }
+            // iPhone Duo partly open: where the crease is (FoldLayout.swift).
+            .modifier(FoldReader(fold: $foldFrame))
             .allowsHitTesting(false)
     }
 

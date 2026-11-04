@@ -45,13 +45,25 @@ struct AnimatorPanel: View {
     let glassNamespace: Namespace.ID
 
     /// Small window: each axis's name and channel above its sliders.
-    @Environment(\.compactLayout) private var compact
+    @Environment(\.compactLayout) private var compactWindow
+    /// The panel's width. A narrow dock (iPhone Duo folded, or held like a book with the dock on the
+    /// left page) gets the same layout as a small window, even when the window itself is large.
+    @State private var width: CGFloat = 0
+
+    /// Narrower than this, the wide axis row (name, sliders and channel info side by side) would
+    /// squeeze the sliders, so each axis's name and channel go above full-width sliders instead.
+    private static let wideRowMinWidth: CGFloat = 640
+
+    private var compact: Bool {
+        compactWindow || (width > 0 && width < Self.wideRowMinWidth)
+    }
 
     var body: some View {
         CollapsibleDock(expanded: $expanded, glassNamespace: glassNamespace) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 10) {
-                    CubeModeIcon()
+                    // Play / pause, like the toolbar's cube button.
+                    Image(systemName: animator.isPlaying ? "pause.fill" : "play.fill")
                         .frame(width: 20, height: 20)
                     Text("Animator")
                         .font(.headline)
@@ -64,9 +76,10 @@ struct AnimatorPanel: View {
                     axisRow(axis)
                 }
             }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         } mini: {
             HStack(spacing: 10) {
-                CubeModeIcon()
+                Image(systemName: animator.isPlaying ? "pause.fill" : "play.fill")
                     .frame(width: 18, height: 18)
                 if let axis = animator.currentAxis {
                     Text("\(axis.name) \(animator.current)")
@@ -83,17 +96,25 @@ struct AnimatorPanel: View {
     }
 
     private var controls: some View {
-        // One row when there's room; in a narrow window the frame rate goes underneath.
+        // Always one row when it can be: the full row; then a tighter one (smaller transport
+        // buttons, no "Frame rate" label); only when even that doesn't fit, the frame rate goes
+        // underneath.
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {
-                transport
+                transport()
                 playModeMenu
                 Spacer(minLength: 8)
                 frameRateLabel
                 frameRate
             }
+            HStack(spacing: 8) {
+                transport(compact: true)
+                playModeMenu
+                Spacer(minLength: 4)
+                frameRate
+            }
             VStack(alignment: .leading, spacing: 8) {
-                transport
+                transport(compact: true)
                 HStack(spacing: 12) {
                     playModeMenu
                     Spacer(minLength: 8)
@@ -103,8 +124,8 @@ struct AnimatorPanel: View {
         }
     }
 
-    private var transport: some View {
-        AnimatorTransport(animator: animator)
+    private func transport(compact: Bool = false) -> some View {
+        AnimatorTransport(animator: animator, compact: compact)
             .padding(.horizontal, 4)
             .background(.thinMaterial, in: Capsule())
     }

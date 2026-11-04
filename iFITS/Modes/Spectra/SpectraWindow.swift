@@ -50,6 +50,8 @@ struct SpectraWindowView: View {
     var onClose: (() -> Void)? = nil
 
     @Environment(\.dismissWindow) private var dismissWindow
+    /// The toolbar is a vertical bar (iPhone Duo): Zoom Out and Export and Send go into it.
+    @State private var hasVerticalToolbar = false
 
     private var title: String {
         guard let name = link?.fileName, !name.isEmpty else { return "Spectra" }
@@ -60,7 +62,8 @@ struct SpectraWindowView: View {
         NavigationStack {
             Group {
                 if let link, let model = link.model, let display = link.display {
-                    SpectraWindowContent(link: link, model: model, display: display)
+                    SpectraWindowContent(link: link, model: model, display: display,
+                                         usesVerticalToolbar: hasVerticalToolbar)
                 } else {
                     ContentUnavailableView("No Spectrum",
                                            systemImage: "chart.xyaxis.line",
@@ -69,6 +72,8 @@ struct SpectraWindowView: View {
             }
             .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
+            // Whether the toolbar is a vertical bar right now (iPhone Duo).
+            .modifier(VerticalToolbarReader(isVertical: $hasVerticalToolbar))
             .toolbar {
                 if showsCloseButton {
                     ToolbarItem(placement: .topBarLeading) {
@@ -101,11 +106,13 @@ struct SpectraWindowView: View {
 }
 
 /// A big spectrum filling the window from the top, with the legend, readout, menus and Zoom Out
-/// underneath.
+/// underneath. With a vertical bar (iPhone Duo), Zoom Out and Export and Send are in the bar and
+/// Region and Statistic share one row, so the spectrum gets the extra height.
 private struct SpectraWindowContent: View {
     let link: SpectraWindowLink
     @Bindable var model: SpectrumModel
     let display: SpectrumDisplay
+    var usesVerticalToolbar = false
 
     /// The "Export and Send" sheet for this window.
     @State private var exportRequest: ExportRequest?
@@ -134,14 +141,32 @@ private struct SpectraWindowContent: View {
                         .frame(width: 120)
                 }
             }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { controls }
-                VStack(alignment: .leading, spacing: 8) { controls }
+            if usesVerticalToolbar {
+                // The Spectra dock's narrow row: Region and Statistic side by side, no labels.
+                HStack(spacing: 8) {
+                    SpectrumSourceMenu(model: model, regions: link.regions, selected: display.sources,
+                                       currentName: display.sourceName, labelMinWidth: 120)
+                    SpectrumStatisticMenu(model: model, isSinglePixel: display.isSinglePixel,
+                                          labelMinWidth: 96)
+                }
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { controls }
+                    VStack(alignment: .leading, spacing: 8) { controls }
+                }
             }
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 16)
+        .toolbar {
+            if usesVerticalToolbar {
+                // Only ever true on iOS 27.1 and later (VerticalToolbarReader).
+                if #available(iOS 27.1, *) {
+                    verticalToolbarItems
+                }
+            }
+        }
         .sheet(item: $exportRequest) { request in
             ExportSheet(request: request, onClose: { exportRequest = nil })
                 .presentationSizing(.form)
@@ -155,6 +180,31 @@ private struct SpectraWindowContent: View {
         let shown = display
         exportRequest = ExportRequest(title: "Export Spectra", baseName: SpectrumExport.baseName(fileName: name)) {
             SpectrumExport.render(display: shown, fileName: name, zoom: zoom)
+        }
+    }
+
+    /// iPhone Duo: Zoom Out and Export and Send, each in its own glass button in the vertical bar.
+    @available(iOS 27.1, *)
+    @ToolbarContentBuilder
+    private var verticalToolbarItems: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                model.zoom = nil
+            } label: {
+                Label("Zoom Out", systemImage: "arrow.up.left.and.arrow.down.right")
+            }
+            .disabled(model.zoom == nil)
+        }
+
+        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                export()
+            } label: {
+                Label("Export and Send", systemImage: "square.and.arrow.up")
+            }
+            .disabled(display.lines.isEmpty)
         }
     }
 

@@ -75,42 +75,22 @@ struct PixelInfoPanel: View {
     }
 
     var body: some View {
+        if expanded || inPopover {
+            fullBox
+        } else {
+            collapsedPill
+        }
+    }
+
+    /// Expanded: the header with the chevron, then the whole table, in a rounded glass box.
+    private var fullBox: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: pixel.source.symbol)
-                    .foregroundStyle(.secondary)
-                Text("Pixel Info")
-                    .font(.subheadline.weight(.semibold))
+                titleLabel
                 Spacer(minLength: 12)
-                if !inPopover {
-                    Button {
-                        withAnimation(DockAnimation.stage(reduceMotion)) { expanded.toggle() }
-                    } label: {
-                        Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                            .frame(width: 26, height: 26)
-                            .background(.quaternary, in: Circle())
-                            .contentShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .hoverEffect(.highlight)
-                    .accessibilityLabel(expanded ? "Collapse Pixel Info" : "Expand Pixel Info")
-                }
+                if !inPopover { collapseButton }
             }
-
-            if expanded || inPopover {
-                table
-            } else {
-                VStack(alignment: .leading, spacing: 0) {
-                    compactRow
-                    // Keeps the box exactly as wide as when it's expanded.
-                    table
-                        .hidden()
-                        .frame(height: 0)
-                        .accessibilityHidden(true)
-                }
-            }
+            table
         }
         .padding(14)
         // Size to the content only, so the box stays compact in the top-right corner.
@@ -118,18 +98,75 @@ struct PixelInfoPanel: View {
         .glassEffect(inPopover ? .identity : .regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
 
-    /// Collapsed: "(40, 35) pix" and "1555.21 MJy/sr", units smaller and gray.
-    private var compactRow: some View {
+    /// Collapsed: the same thin capsule as the iPhone's one-line Pixel Info (PixelInfoPill), with a
+    /// small chevron at the end to expand it again.
+    private var collapsedPill: some View {
+        // FITS pixel numbers are 1-based, with y counting up from the bottom.
         let fx = pixel.column + 1, fy = imageHeight - pixel.row
         let unit = text("BUNIT")
-        return HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text("(\(fx), \(fy))\(small(" pix"))")
-            Spacer(minLength: 12)
-            Text("\(valueText)\(small(unit.isEmpty ? "" : " " + unit))")
+        return HStack(spacing: 8) {
+            Image(systemName: pixel.source.symbol)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("(\(fx), \(fy))\(pillSmall(" pix"))")
+                .layoutPriority(1)
+            Text("\(valueText)\(pillSmall(unit.isEmpty ? "" : " " + unit))")
+            Button {
+                withAnimation(DockAnimation.stage(reduceMotion)) { expanded = true }
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 20, height: 20)
+                    .background(.quaternary, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+            .accessibilityLabel("Expand Pixel Info")
         }
-        .font(.system(.callout, design: .monospaced))
+        .font(.system(.caption, design: .monospaced))
         .lineLimit(1)
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .fixedSize()
+        .glassEffect(.regular, in: Capsule())
     }
+
+    /// Units in the collapsed capsule: smaller and gray, as in PixelInfoPill.
+    private func pillSmall(_ s: String) -> Text {
+        Text(s).font(.system(.caption2, design: .monospaced)).foregroundStyle(.secondary)
+    }
+
+    /// The input icon (pointer, Pencil or finger) and "Pixel Info". (Not `header`: that's the FITS
+    /// header the box reads its units from.)
+    private var titleLabel: some View {
+        HStack(spacing: 6) {
+            Image(systemName: pixel.source.symbol)
+                .foregroundStyle(.secondary)
+            Text("Pixel Info")
+                .font(.subheadline.weight(.semibold))
+        }
+    }
+
+    /// Chevron: the full table, or just the coordinates.
+    private var collapseButton: some View {
+        Button {
+            withAnimation(DockAnimation.stage(reduceMotion)) { expanded.toggle() }
+        } label: {
+            Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
+                .background(.quaternary, in: Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .hoverEffect(.highlight)
+        .accessibilityLabel(expanded ? "Collapse Pixel Info" : "Expand Pixel Info")
+    }
+
 
     /// A unit in the collapsed row: smaller and gray.
     private func small(_ s: String) -> Text {

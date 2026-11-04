@@ -5,9 +5,12 @@
 //  The AR screen: the cube in 3-D (or in the room through the camera), with a back arrow (top
 //  left), camera and options buttons (top right), and at the bottom left the colorbar (same place
 //  and look as the main view's) and the 3-D grid button (like the V A R S buttons).
+//  In a vertical bar (iPhone Duo) the back, room, grid, share and options buttons go into the
+//  system's vertical toolbar instead, each in its own glass button.
 //
 
 import SwiftUI
+import ARKit
 
 struct ARModeView: View {
     @State private var model: ARModel
@@ -18,6 +21,8 @@ struct ARModeView: View {
     /// The screen's size: a small window gets smaller buttons, the title under them and a shorter
     /// colorbar, so nothing runs off the edges.
     @State private var screenSize: CGSize = .zero
+    /// The toolbar is a vertical bar (iPhone Duo): the buttons are in it instead of on the screen.
+    @State private var hasVerticalToolbar = false
     var onClose: () -> Void
 
     private var compact: Bool {
@@ -31,6 +36,27 @@ struct ARModeView: View {
     }
 
     var body: some View {
+        NavigationStack {
+            screen
+                .toolbar {
+                    if hasVerticalToolbar {
+                        // Only ever true on iOS 27.1 and later (VerticalToolbarReader).
+                        if #available(iOS 27.1, *) {
+                            verticalToolbar
+                        }
+                    }
+                }
+                // Without a vertical bar the buttons are drawn on the screen, so the bar is hidden.
+                .toolbar(hasVerticalToolbar ? .automatic : .hidden, for: .navigationBar)
+                .navigationTitle(model.source.fileName)
+                .navigationBarTitleDisplayMode(.inline)
+                .modifier(VerticalToolbarReader(isVertical: $hasVerticalToolbar))
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    /// The cube, the labels and the on-screen controls.
+    private var screen: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
@@ -71,7 +97,6 @@ struct ARModeView: View {
             controls
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { screenSize = $0 }
-        .preferredColorScheme(.dark)
         .task { await model.load() }
         .sheet(item: $exportRequest) { request in
             ExportSheet(request: request, onClose: { exportRequest = nil })
@@ -83,7 +108,10 @@ struct ARModeView: View {
 
     private var controls: some View {
         VStack(spacing: 0) {
-            if compact {
+            if hasVerticalToolbar {
+                // iPhone Duo: the buttons are in the vertical bar and the title in the navigation bar.
+                EmptyView()
+            } else if compact {
                 // Small window: the buttons in one row, the title underneath.
                 VStack(spacing: 8) {
                     HStack(alignment: .top, spacing: 8) {
@@ -112,28 +140,22 @@ struct ARModeView: View {
             Spacer(minLength: 8)
 
             if compact {
-                // Small window: the hint above, then the colorbar and the 3-D grid button.
+                // Small window: the colorbar and the 3-D grid button.
                 VStack(alignment: .leading, spacing: 10) {
-                    hint
-                        .frame(maxWidth: .infinity)
                     HStack(alignment: .bottom, spacing: 12) {
                         colorbar
-                        gridButton
+                        if !hasVerticalToolbar { gridButton }
                         Spacer(minLength: 0)
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.bottom, 12)
             } else {
-                // Bottom left: the colorbar (same place as in the main view), then the 3-D grid button;
-                // hints in the middle.
+                // Bottom left: the colorbar (same place as in the main view), then the 3-D grid button.
                 HStack(alignment: .bottom, spacing: 16) {
                     colorbar
-                    gridButton
+                    if !hasVerticalToolbar { gridButton }
                     Spacer()
-                    hint
-                    Spacer()
-                    Color.clear.frame(width: 70, height: 1)
                 }
                 .padding(.leading, 40)
                 .padding(.trailing, 24)
@@ -152,7 +174,7 @@ struct ARModeView: View {
             model.status = nil
             model.inRoom.toggle()
         }
-        .disabled(model.volume == nil)
+        .disabled(!canPlaceInRoom)
         circleButton(systemImage: "square.and.arrow.up", label: "Export and send a picture of the cube") {
             exportPicture()
         }
@@ -165,7 +187,7 @@ struct ARModeView: View {
     private var colorbar: some View {
         if model.volume != nil {
             let r = model.range
-            // Room left over by the buttons, title, hint and grid button in a small window.
+            // Room left over by the buttons, title and grid button in a small window.
             let bar = compact ? min(300, screenSize.height - 300) : 300
             ARColorbar(colormap: model.colormap, inverted: model.inverted, lo: r.lo, hi: r.hi,
                        unit: model.unitText,
@@ -191,6 +213,12 @@ struct ARModeView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .glassEffect(.regular, in: Capsule())
+    }
+
+    /// The cube can go in the room: it's loaded, and this device can track the room with the camera.
+    /// (On devices that can't, the button is greyed out instead of showing a note.)
+    private var canPlaceInRoom: Bool {
+        model.volume != nil && ARWorldTrackingConfiguration.isSupported
     }
 
     /// Same look as the V A R S buttons: a glass circle, orange while on.
@@ -228,6 +256,23 @@ struct ARModeView: View {
 
     private var optionsMenu: some View {
         Menu {
+            optionsMenuItems
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.title2.weight(.semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: buttonSize, height: buttonSize)
+                .contentShape(Circle())
+                .glassEffect(.regular.interactive(), in: Circle())
+        }
+        .menuOrder(.fixed)
+        .disabled(model.volume == nil)
+        .accessibilityLabel("Options")
+    }
+
+    /// Reset View, Opacity, Value Range and Depth (the options menu, on screen or in the vertical bar).
+    @ViewBuilder
+    private var optionsMenuItems: some View {
             Button {
                 model.resetToken += 1
             } label: {
@@ -260,17 +305,74 @@ struct ARModeView: View {
                 Label("Depth", systemImage: "arrow.up.left.and.arrow.down.right")
             }
             .pickerStyle(.menu)
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(Color.primary)
-                .frame(width: buttonSize, height: buttonSize)
-                .contentShape(Circle())
-                .glassEffect(.regular.interactive(), in: Circle())
+    }
+
+    // MARK: Vertical bar (iPhone Duo)
+
+    /// Top to bottom: Back, In the Room, then 3-D Grid and Reset View together, Export and Send,
+    /// then ••• with the options. When the column runs out of room, the system moves the lower
+    /// buttons into •••.
+    @available(iOS 27.1, *)
+    @ToolbarContentBuilder
+    private var verticalToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button(action: onClose) {
+                Label("Back to the Image", systemImage: "chevron.left")
+            }
         }
-        .menuOrder(.fixed)
-        .disabled(model.volume == nil)
-        .accessibilityLabel("Options")
+        .visibilityPriority(.high)
+
+        // Camera: the cube in the room (orange while on).
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                model.status = nil
+                model.inRoom.toggle()
+            } label: {
+                Label(model.inRoom ? "Leave the Room" : "Place the Cube in the Room", systemImage: "arkit")
+                    .foregroundStyle(model.inRoom ? Color.orange : Color.primary)
+            }
+            .disabled(!canPlaceInRoom)
+        }
+        .visibilityPriority(.high)
+
+        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+
+        // The 3-D grid (orange while on, like the V A R S buttons) and Reset View, in one group like
+        // Grid and Reset View in the main viewer.
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button {
+                withAnimation(.snappy) { model.showGrid.toggle() }
+            } label: {
+                Label(model.showGrid ? "Hide the 3-D Grid" : "Show the 3-D Grid", systemImage: "cube.transparent")
+                    .foregroundStyle(model.showGrid ? Color.orange : Color.primary)
+            }
+            .disabled(model.volume == nil)
+
+            Button {
+                model.resetToken += 1
+            } label: {
+                Label("Reset View", systemImage: "arrow.counterclockwise")
+            }
+            .disabled(model.volume == nil)
+        }
+        .visibilityPriority(.high)
+
+        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+
+        // Export and Send a picture of the cube.
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { exportPicture() } label: {
+                Label("Export and Send", systemImage: "square.and.arrow.up")
+            }
+            .disabled(model.volume == nil)
+        }
+
+        ToolbarSpacer(.fixed, placement: .topBarTrailing)
+
+        // ••• : Reset View, Opacity, Value Range and Depth.
+        ToolbarOverflowMenu {
+            optionsMenuItems
+        }
     }
 
     private func circleButton(systemImage: String, label: String, highlighted: Bool = false,
@@ -288,30 +390,6 @@ struct ARModeView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
-    }
-
-    private var defaultHint: String? {
-        guard model.volume != nil else { return nil }
-        return model.inRoom
-            ? "Tap a table or the floor to move the cube there. Pinch to resize, drag to turn it."
-            : "Drag to rotate · Pinch to zoom · Twist to roll · Double-tap to reset"
-    }
-
-    /// What to do next, or a message from the camera.
-    @ViewBuilder
-    private var hint: some View {
-        let text: String? = model.status ?? defaultHint
-        if let text {
-            Text(text)
-                .font(.callout)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                .glassEffect(.regular, in: Capsule())
-                .frame(maxWidth: 620)
-                .fixedSize(horizontal: false, vertical: true)
-                .allowsHitTesting(false)
-        }
     }
 }
 
