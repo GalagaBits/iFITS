@@ -233,7 +233,15 @@ struct ContentView: View {
     @AppStorage("autosaveEnabled") var autosaveEnabled = true
     /// The V A R S buttons on the left (Settings, iPad and iPhone Duo). When they're off, the modes are
     /// in the toolbar's » or ••• menu.
-    @AppStorage("showModeButtons") var showModeButtons = true
+    @AppStorage("showModeButtons") var showModeButtons = false
+    
+    var modeButtonsShown: Bool {
+        !windowLayout.isCompact && showModeButtons && bookFold == nil
+    }
+    
+    
+    
+    
     /// `edits.editCount` when the file was last saved (or opened).
     @State var savedEditCount = 0
     @State var isSaving = false
@@ -684,7 +692,7 @@ struct ContentView: View {
     /// The V A R S buttons on the left (in a small window they're in the toolbar's » menu).
     var modeButtons: some View {
         HStack {
-            if !windowLayout.isCompact && showModeButtons {
+            if modeButtonsShown {
                 VStack(spacing: 35) {
                     VStack(spacing: 35) {
                         ForEach(modes, id: \.self) { mode in
@@ -898,7 +906,7 @@ struct ContentView: View {
     var dockLeadingInset: CGFloat {
         if windowLayout.isCompact { return 12 }
         // No V A R S buttons (turned off in Settings): nothing on the left to make room for.
-        if !showModeButtons { return 24 }
+        if !modeButtonsShown { return 24 }
         guard modeButtonsBottom > 0, windowFrame.height > 0, panelHeight > 0 else { return 24 }
         let buttonsBottom = modeButtonsBottom - windowFrame.minY
         let dockTop = windowFrame.height - 8 - panelHeight
@@ -1052,7 +1060,7 @@ struct ContentView: View {
         }
         // Small window (no V A R S buttons): from just under the one-line Pixel Info.
         // Small window, or the V A R S buttons turned off: from near the top.
-        let top = windowLayout.isCompact || !showModeButtons
+        let top = !modeButtonsShown
             ? frame.minY + 52
             : (modeButtonsBottom > 0 ? modeButtonsBottom : frame.minY + 445) + 24
         let room = bottom - top
