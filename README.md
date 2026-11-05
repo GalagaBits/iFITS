@@ -72,7 +72,7 @@ Annotations and regions save automatically (turn off **Autosave** in **•••
 
 ## License and attribution
 
-This project is under the GPL-3.0 license, which can be viewed [here](https://github.com/GalagaBits/iFITS/blob/main/LICENSE).
+This project is under the GPL-3.0 license with an App Store exception. [LICENSE](https://github.com/GalagaBits/iFITS/blob/main/LICENSE) [APP STORE EXCEPTION](https://github.com/GalagaBits/iFITS/blob/main/COPYING.iOS).
 
 ## Disclosures and Comments
 
